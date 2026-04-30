@@ -1,0 +1,330 @@
+name: Auto Merge Copilot PR After Approval
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+
+jobs:
+  auto-merge:
+    if: >-
+      github.event.review.state == 'approved' &&
+      contains(fromJSON('["copilot-swe-agent[bot]","copilot[bot]","github-copilot[bot]","copilot"]'), github.event.pull_request.user.login)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Merge Approved Copilot PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Helper: wait for a given number of seconds
+            function sleep(seconds) {
+              return new Promise(resolve => setTimeout(resolve, seconds * 1000));
+            }
+
+            // Get PR details
+            let { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+            // If the PR is still a draft, mark it as ready for review
+            if (pr.draft) {
+              console.log(`PR #${prNumber} is a draft. Marking as ready for review...`);
+              await github.graphql(`
+                mutation($prId: ID!) {
+                  markPullRequestReadyForReview(input: { pullRequestId: $prId }) {
+                    pullRequest { number }
+                  }
+                }
+              `, { prId: pr.node_id });
+              console.log(`PR #${prNumber} marked as ready. Waiting for GitHub to update state...`);
+
+              // Wait and re-fetch until it's no longer a draft (max 60s)
+              for (let i = 0; i < 6; i++) {
+                await sleep(10);
+                const { data: updated } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                if (!updated.draft) {
+                  pr = updated;
+                  console.log(`PR #${prNumber} is now ready for review.`);
+                  break;
+                }
+                console.log(`Still draft, retrying... (${(i + 1) * 10}s)`);
+              }
+
+              if (pr.draft) {
+                core.setFailed(`PR #${prNumber} is still a draft after waiting. Please mark it ready manually.`);
+                return;
+              }
+            }
+
+            if (pr.mergeable_state === 'blocked') {
+              console.log(`PR #${prNumber} is blocked (pending required checks). Enabling auto-merge...`);
+              try {
+                await github.graphql(`
+                  mutation($prId: ID!) {
+                    enablePullRequestAutoMerge(input: { pullRequestId: $prId, mergeMethod: SQUASH }) {
+                      pullRequest { number }
+                    }
+                  }
+                `, { prId: pr.node_id });
+                console.log(`Auto-merge enabled on PR #${prNumber}. Will merge when checks pass.`);
+              } catch (e) {
+                console.log(`Could not enable auto-merge: ${e.message}`);
+              }
+              return;
+            }
+
+            // Wait for mergeable state if unknown
+            if (pr.mergeable === null) {
+              console.log(`Mergeable state unknown, waiting...`);
+              for (let i = 0; i < 6; i++) {
+                await sleep(10);
+                const { data: updated } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                if (updated.mergeable !== null) {
+                  pr = updated;
+                  break;
+                }
+              }
+            }
+
+            if (!pr.mergeable) {
+              core.setFailed(`PR #${prNumber} is not mergeable. State: ${pr.mergeable_state}`);
+              return;
+            }
+
+            // Merge the PR using squash
+            await github.rest.pulls.merge({
+              owner,
+              repo,
+              pull_number: prNumber,
+              merge_method: 'squash',
+              commit_title: `fix: auto-merge Copilot PR #${prNumber}`,
+              commit_message: `Automatically merged after human approval.\nCloses #${pr.body?.match(/#(\d+)/)?.[1] || 'unknown'}`
+            });
+
+            console.log(`PR #${prNumber} merged successfully!`);
+
+            // Close the related issue if linked
+            const issueMatch = pr.body?.match(/#(\d+)/);
+            if (issueMatch) {
+              try {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: Number(issueMatch[1]),
+                  state: 'closed'
+                });
+                console.log(`Closed related issue #${issueMatch[1]}`);
+              } catch (e) {
+                console.log(`Could not close issue: ${e.message}`);
+              }
+            }
+
+      - name: Trigger Test Rerun to Verify Fix
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            // Get recent workflow runs to determine rerun count
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'daily-test-fix.yml',
+              per_page: 10
+            });
+
+            // Find the rerun count by looking at runs AFTER the latest initial (non-rerun) run
+            let rerunCount = 0;
+            const runs_list = runs.workflow_runs;
+
+            // Find the most recent initial run (schedule or manual with no "Rerun" in title)
+            let latestInitialRunTime = null;
+            for (const run of runs_list) {
+              const isRerun = run.display_title?.includes('Rerun');
+              if (!isRerun) {
+                latestInitialRunTime = new Date(run.created_at);
+                break;
+              }
+            }
+
+            // Count reruns that happened AFTER the latest initial run
+            if (latestInitialRunTime) {
+              for (const run of runs_list) {
+                if (new Date(run.created_at) > latestInitialRunTime) {
+                  const match = run.display_title?.match(/Rerun (\d+)/);
+                  if (match) {
+                    rerunCount = Math.max(rerunCount, parseInt(match[1]));
+                  }
+                }
+              }
+            }
+            rerunCount++;
+
+            const MAX_RERUNS = 2;
+            if (rerunCount > MAX_RERUNS) {
+              console.log(`Rerun limit reached (${MAX_RERUNS}). Skipping further reruns.`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'daily-test-fix.yml',
+              ref: 'main',
+              inputs: {
+                rerun_count: String(rerunCount)
+              }
+            });
+            console.log(`Triggered test workflow - Rerun ${rerunCount}`);
+
+  escalate-rejected-pr:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == false &&
+      contains(fromJSON('["copilot-swe-agent[bot]","copilot[bot]","github-copilot[bot]","copilot"]'), github.event.pull_request.user.login)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Extract Issue Number and Failed Tests
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const issueMatch = pr.body?.match(/#(\d+)/);
+            const issueNumber = issueMatch ? issueMatch[1] : '';
+            core.setOutput('issue_number', issueNumber);
+            core.setOutput('pr_number', String(pr.number));
+            core.setOutput('pr_title', pr.title || 'Copilot PR');
+            core.setOutput('pr_url', pr.html_url);
+
+            // Try to get failed test names from the linked issue
+            let failedTests = 'Unknown tests';
+            if (issueNumber) {
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number(issueNumber)
+                });
+                failedTests = issue.title || failedTests;
+              } catch (e) {
+                console.log(`Could not fetch issue: ${e.message}`);
+              }
+            }
+            core.setOutput('failed_tests', failedTests);
+
+      - name: Create JIRA Task for Rejected Copilot Fix
+        id: jira
+        uses: actions/github-script@v7
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const jiraBase = process.env.JIRA_BASE_URL;
+            const jiraEmail = process.env.JIRA_EMAIL;
+            const jiraToken = process.env.JIRA_API_TOKEN;
+            const projectKey = process.env.JIRA_PROJECT_KEY;
+
+            if (!jiraBase || !jiraEmail || !jiraToken || !projectKey) {
+              console.log('JIRA secrets not configured. Skipping JIRA escalation.');
+              return;
+            }
+
+            const prNumber = '${{ steps.extract.outputs.pr_number }}';
+            const prTitle = '${{ steps.extract.outputs.pr_title }}';
+            const prUrl = '${{ steps.extract.outputs.pr_url }}';
+            const failedTests = '${{ steps.extract.outputs.failed_tests }}';
+            const issueNumber = '${{ steps.extract.outputs.issue_number }}';
+            const repo = '${{ github.repository }}';
+
+            const auth = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64');
+
+            const summary = `[Auto-Escalation] Copilot fix rejected - PR #${prNumber}`;
+            const descriptionText = `A Copilot-generated fix PR was closed without merging.\n\n` +
+              `PR: #${prNumber} - ${prTitle}\n` +
+              `PR URL: ${prUrl}\n` +
+              `GitHub Issue: https://github.com/${repo}/issues/${issueNumber}\n` +
+              `Failed Tests: ${failedTests}\n\n` +
+              `The Copilot agent proposed a fix that was rejected. This requires manual investigation.`;
+
+            const resp = await fetch(`${jiraBase}/rest/api/3/issue`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                fields: {
+                  project: { key: projectKey },
+                  summary: summary,
+                  description: {
+                    type: "doc",
+                    version: 1,
+                    content: [{ type: "paragraph", content: [{ type: "text", text: descriptionText }] }]
+                  },
+                  issuetype: { name: "Task" },
+                  labels: ["auto-test-failure", "self-healing-framework", "copilot-fix-rejected"],
+                  priority: { name: "Highest" }
+                }
+              })
+            });
+
+            const data = await resp.json();
+            if (data.key) {
+              console.log(`JIRA task created: ${data.key}`);
+              core.setOutput('jira_key', data.key);
+            } else {
+              console.log(`JIRA creation failed: ${JSON.stringify(data)}`);
+              core.warning('Failed to create JIRA task. Check JIRA secrets and project config.');
+            }
+
+      - name: Label and Comment on GitHub Issue
+        if: steps.extract.outputs.issue_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const issueNumber = Number('${{ steps.extract.outputs.issue_number }}');
+            const prNumber = '${{ steps.extract.outputs.pr_number }}';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Add label
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo,
+                issue_number: issueNumber,
+                labels: ['needs-manual-fix']
+              });
+            } catch (e) {
+              console.log(`Could not add label: ${e.message}`);
+            }
+
+            // Add comment
+            await github.rest.issues.createComment({
+              owner, repo,
+              issue_number: issueNumber,
+              body: `⚠️ **Copilot fix PR #${prNumber} was rejected** (closed without merging).\n\nThe automated fix was insufficient. This issue has been escalated to JIRA for manual investigation.\n\nLabel \`needs-manual-fix\` has been added.`
+            });

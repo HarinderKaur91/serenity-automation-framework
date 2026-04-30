@@ -1,0 +1,471 @@
+name: Daily Test And Auto Fix
+
+run-name: >-
+  ${{ github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0'
+      && format('Rerun {0} - Verify Fix', github.event.inputs.rerun_count)
+      || 'Daily Test And Auto Fix' }}
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Environment to test'
+        required: false
+        default: 'qa'
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+      rerun_count:
+        description: 'Rerun attempt number'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ github.event_name == 'workflow_dispatch' && fromJson(format('["{0}"]', inputs.env != '' && inputs.env || 'qa')) || fromJson('["dev","qa","prod"]') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install Playwright Browsers
+        run: mvn org.codehaus.mojo:exec-maven-plugin:3.0.0:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install --with-deps"
+
+      - name: Run Tests
+        id: run
+        run: |
+          if [ "${{ github.event.inputs.rerun_count }}" != "0" ] && [ "${{ github.event.inputs.rerun_count }}" != "" ]; then
+            echo "Rerun detected — checking for failed tests XML from previous run..."
+            # Download the failed tests XML from the latest previous run
+            WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="Daily Test And Auto Fix") | .id')
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs?per_page=5&status=completed" --jq '.workflow_runs[0].id')
+            if [ -n "$RUN_ID" ]; then
+              gh run download "$RUN_ID" -n testng-failed-xml-${{ matrix.env }} -D testng-failed-artifact 2>/dev/null || true
+            fi
+            if [ -f "testng-failed-artifact/testng-failed.xml" ]; then
+              echo "Running only failed tests from previous run..."
+              mvn test -DsuiteXmlFile=testng-failed-artifact/testng-failed.xml -Denv=${{ matrix.env }} -Dapp.headless=true
+            else
+              echo "No failed tests XML found, running all tests..."
+              mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true
+            fi
+          else
+            mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+
+      - name: Save test outcome
+        if: always()
+        run: |
+          echo "Test outcome: ${{ steps.run.outcome }}" > test-outcome.txt
+
+      - name: Upload Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.env }}
+          path: |
+            test-outcome.txt
+            target/surefire-reports/
+            test-output/
+            reports/
+          if-no-files-found: warn
+
+      - name: Upload Failed Tests XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testng-failed-xml-${{ matrix.env }}
+          path: target/surefire-reports/testng-failed.xml
+          if-no-files-found: ignore
+
+      - name: Email Test Reports
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "Test Report [${{ matrix.env }}] — ${{ steps.run.outcome == 'failure' && 'FAILURES DETECTED ❌' || 'ALL PASSED ✅' }} — ${{ github.repository }}"
+          to: harinder.qa.88@gmail.com
+          from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
+          body: |
+            Hi,
+
+            The daily test run has completed.
+
+            Environment: ${{ matrix.env }}
+            Status: ${{ steps.run.outcome }}
+            Repository: ${{ github.repository }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Reports are attached to this email.
+
+            — Self-Healing Test Framework
+          attachments: reports/*.html,target/surefire-reports/emailable-report.html
+
+  report-success:
+    needs: run-tests
+    if: needs.run-tests.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: All Tests Passed
+        uses: actions/github-script@v7
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const rerunCount = '${{ github.event.inputs.rerun_count }}' || '0';
+            const isRerun = rerunCount !== '0' && rerunCount !== '';
+
+            if (isRerun) {
+              console.log(`✅ All tests passed on Rerun ${rerunCount}! No further reruns required.`);
+              console.log('The Copilot fix has been verified successfully.');
+
+              // Close the auto-test-failure issue if open
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'auto-test-failure',
+                state: 'open'
+              });
+
+              for (const issue of issues) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `✅ **All tests passed on Rerun ${rerunCount}.** The fix has been verified. Closing this issue.`
+                });
+                console.log(`Closed issue #${issue.number} - fix verified.`);
+              }
+
+              // Transition linked JIRA defects to Done
+              const jiraBase = process.env.JIRA_BASE_URL;
+              const jiraEmail = process.env.JIRA_EMAIL;
+              const jiraToken = process.env.JIRA_API_TOKEN;
+              const jiraProject = process.env.JIRA_PROJECT_KEY;
+
+              if (jiraBase && jiraEmail && jiraToken && jiraProject) {
+                const auth = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64');
+
+                for (const issue of issues) {
+                  const jql = `project = "${jiraProject}" AND summary ~ "Auto Test Failure - GitHub #${issue.number}" AND status != Done AND status != Closed`;
+                  const searchResp = await fetch(`${jiraBase}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=1`, {
+                    headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
+                  });
+                  const searchData = await searchResp.json();
+
+                  if (searchData.total > 0) {
+                    const jiraKey = searchData.issues[0].key;
+                    const jiraId = searchData.issues[0].id;
+
+                    // Get available transitions
+                    const transResp = await fetch(`${jiraBase}/rest/api/3/issue/${jiraKey}/transitions`, {
+                      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
+                    });
+                    const transData = await transResp.json();
+                    const doneTrans = transData.transitions?.find(t =>
+                      t.name.toLowerCase().includes('done') || t.name.toLowerCase().includes('close') || t.name.toLowerCase().includes('resolve')
+                    );
+
+                    if (doneTrans) {
+                      await fetch(`${jiraBase}/rest/api/3/issue/${jiraKey}/transitions`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ transition: { id: doneTrans.id } })
+                      });
+                      console.log(`JIRA ${jiraKey} transitioned to "${doneTrans.name}".`);
+
+                      // Add resolution comment
+                      await fetch(`${jiraBase}/rest/api/3/issue/${jiraKey}/comment`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          body: {
+                            type: "doc", version: 1,
+                            content: [{ type: "paragraph", content: [{ type: "text",
+                              text: `✅ All tests passed on Rerun ${rerunCount}. Fix verified automatically by the self-healing framework.`
+                            }] }]
+                          }
+                        })
+                      });
+                    } else {
+                      console.log(`No Done/Close transition found for ${jiraKey}. Available: ${transData.transitions?.map(t => t.name).join(', ')}`);
+                    }
+                  }
+                }
+              }
+            } else {
+              console.log('✅ All tests passed! No issues to report. No rerun required.');
+            }
+
+  open-issue-and-assign-copilot:
+    needs: run-tests
+    if: always() && needs.run-tests.result == 'failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-reports-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Or Update Issue
+        id: issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            function walk(dir) {
+              if (!fs.existsSync(dir)) return [];
+              let out = [];
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, e.name);
+                out = e.isDirectory() ? out.concat(walk(p)) : out.concat(p);
+              }
+              return out;
+            }
+
+            let body = `## Automated Test Failure\n\n`;
+            body += `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n`;
+            body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
+
+            const files = walk('artifacts').filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
+
+            for (const file of files.slice(0, 8)) {
+              const content = fs.readFileSync(file, 'utf8').slice(0, 3000);
+              if (
+                content.includes('FAILURE') ||
+                content.includes('ERROR') ||
+                content.includes('<failure')
+              ) {
+                body += `### ${path.basename(file)}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+              }
+            }
+
+            // Close any existing open auto-test-failure issues so a fresh issue
+            // triggers a new Copilot agent session (re-assigning the same issue
+            // does NOT start a new session).
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'auto-test-failure',
+              state: 'open'
+            });
+
+            for (const old of existing.data) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: old.number,
+                state: 'closed'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: old.number,
+                body: `Closing in favour of a new issue — test failures still present. New workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              });
+              console.log(`Closed stale issue #${old.number}`);
+            }
+
+            // Always create a fresh issue so Copilot agent gets a new assignment
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Test failures detected',
+              body,
+              labels: ['bug', 'auto-test-failure']
+            });
+            const issueNumber = created.data.number;
+            console.log(`New issue #${issueNumber} created with test failure details.`);
+
+            core.setOutput('issue_number', String(issueNumber));
+
+      - name: Assign Copilot To Issue
+        if: github.event.inputs.rerun_count == '' || github.event.inputs.rerun_count == '0' || github.event.inputs.rerun_count == '1'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+        run: |
+          ISSUE_NUMBER="${{ steps.issue.outputs.issue_number }}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+
+          echo "Assigning copilot-swe-agent to issue #${ISSUE_NUMBER} via REST API..."
+
+          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"main","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the main branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.","custom_agent":"","model":"gpt-5.3-codex"}}' "$OWNER" "$REPO" | gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${OWNER}/${REPO}/issues/${ISSUE_NUMBER}/assignees" \
+            --input -)
+
+          echo "API Response: ${RESPONSE}"
+          echo "Copilot cloud agent assigned to issue #${ISSUE_NUMBER}."
+
+      - name: Escalate To JIRA - Retries Exhausted
+        if: github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0' && github.event.inputs.rerun_count != '1'
+        uses: actions/github-script@v7
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const issueNumber = '${{ steps.issue.outputs.issue_number }}';
+            const rerunCount = '${{ github.event.inputs.rerun_count }}';
+
+            const jiraBase = process.env.JIRA_BASE_URL;
+            const jiraEmail = process.env.JIRA_EMAIL;
+            const jiraToken = process.env.JIRA_API_TOKEN;
+            const projectKey = process.env.JIRA_PROJECT_KEY;
+
+            if (!jiraBase || !jiraEmail || !jiraToken || !projectKey) {
+              console.log('JIRA secrets not configured. Skipping JIRA escalation.');
+              return;
+            }
+
+            const auth = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64');
+
+            // Build failure summary
+            function walk(dir) {
+              if (!fs.existsSync(dir)) return [];
+              let out = [];
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, e.name);
+                out = e.isDirectory() ? out.concat(walk(p)) : out.concat(p);
+              }
+              return out;
+            }
+
+            let failureDetails = '';
+            const files = walk('artifacts').filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
+            for (const file of files.slice(0, 5)) {
+              const content = fs.readFileSync(file, 'utf8').slice(0, 2000);
+              if (content.includes('FAILURE') || content.includes('ERROR') || content.includes('<failure')) {
+                failureDetails += `\n*${path.basename(file)}*\n{code}\n${content}\n{code}\n`;
+              }
+            }
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const ghIssueUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}`;
+
+            const descriptionText = `Automated Test Failure - Requires Manual Intervention\n\n` +
+              `Copilot agent attempted to fix this issue but failed after ${rerunCount} retries.\n\n` +
+              `GitHub Actions Run: ${runUrl}\n` +
+              `GitHub Issue: ${ghIssueUrl}\n` +
+              `Repository: ${context.repo.owner}/${context.repo.repo}\n` +
+              `Date: ${new Date().toISOString()}\n\n` +
+              `Failure Details:\n${failureDetails}\n\n` +
+              `This defect was escalated by the self-healing test framework after all automatic fix attempts were exhausted.`;
+
+            // Search for existing open JIRA issue
+            const jql = `project = "${projectKey}" AND summary ~ "Auto Test Failure - GitHub #${issueNumber}" AND status != Done AND status != Closed`;
+            const searchResp = await fetch(`${jiraBase}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=1`, {
+              headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
+            });
+            const searchData = await searchResp.json();
+
+            if (searchData.total > 0) {
+              const jiraKey = searchData.issues[0].key;
+              // Add retry-exhausted comment to existing JIRA
+              await fetch(`${jiraBase}/rest/api/3/issue/${jiraKey}/comment`, {
+                method: 'POST',
+                headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  body: {
+                    type: "doc", version: 1,
+                    content: [{ type: "paragraph", content: [{ type: "text",
+                      text: `⚠️ Copilot agent failed to fix after ${rerunCount} retries. Manual intervention required. Run: ${runUrl}`
+                    }] }]
+                  }
+                })
+              });
+              console.log(`Updated existing JIRA issue ${jiraKey} with retry-exhausted notice.`);
+            } else {
+              // Create new JIRA Bug
+              const createResp = await fetch(`${jiraBase}/rest/api/3/issue`, {
+                method: 'POST',
+                headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  fields: {
+                    project: { key: projectKey },
+                    summary: `Auto Test Failure - GitHub #${issueNumber} [Retries Exhausted]`,
+                    description: {
+                      type: "doc",
+                      version: 1,
+                      content: [{ type: "paragraph", content: [{ type: "text", text: descriptionText }] }]
+                    },
+                    issuetype: { name: "Task" },
+                    labels: ["auto-test-failure", "self-healing-framework", "retries-exhausted"],
+                    priority: { name: "Highest" }
+                  }
+                })
+              });
+              const jiraData = await createResp.json();
+
+              if (jiraData.key) {
+                console.log(`🐛 JIRA Bug created: ${jiraData.key} — retries exhausted, needs manual fix.`);
+
+                // Comment on GitHub issue with JIRA link
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number(issueNumber),
+                  body: `⚠️ **Copilot agent failed after ${rerunCount} retries.** JIRA defect escalated for manual intervention:\n\n🔗 [${jiraData.key}](${jiraBase}/browse/${jiraData.key})`
+                });
+
+                // Add 'needs-manual-fix' label to GitHub issue
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: Number(issueNumber),
+                  labels: ['needs-manual-fix']
+                });
+              } else {
+                console.log(`JIRA creation failed: ${JSON.stringify(jiraData)}`);
+                core.warning('Failed to create JIRA bug. Check JIRA secrets and project config.');
+              }
+            }
