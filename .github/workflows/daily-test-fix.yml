@@ -331,7 +331,7 @@ jobs:
 
           echo "Assigning copilot-swe-agent to issue #${ISSUE_NUMBER} via REST API..."
 
-          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"main","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the main branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.","custom_agent":"","model":"gpt-5.3-codex"}}' "$OWNER" "$REPO" | gh api \
+          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"master","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators."}}' "$OWNER" "$REPO" | gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
