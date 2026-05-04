@@ -23,6 +23,12 @@ on:
         description: 'Rerun attempt number'
         required: false
         default: '0'
+  pull_request:
+    types: [closed]
+    branches: [master]
+  pull_request:
+    types: [closed]
+    branches: [master]
 
 permissions:
   contents: write
@@ -53,22 +59,56 @@ jobs:
         id: run
         run: |
           if [ "${{ github.event.inputs.rerun_count }}" != "0" ] && [ "${{ github.event.inputs.rerun_count }}" != "" ]; then
-            echo "Rerun detected — checking for failed tests XML from previous run..."
-            # Download the failed tests XML from the latest previous run
+            # ── MANUAL RERUN (triggered after Copilot fix) ──────────────────────
+            echo "========================================================"
+            echo "🔄 MANUAL RERUN ${{ github.event.inputs.rerun_count }}: Fetching failed tests from previous run..."
+            echo "========================================================"
             WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows --jq '.workflows[] | select(.name=="Daily Test And Auto Fix") | .id')
             RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs?per_page=5&status=completed" --jq '.workflow_runs[0].id')
             if [ -n "$RUN_ID" ]; then
               gh run download "$RUN_ID" -n testng-failed-xml-${{ matrix.env }} -D testng-failed-artifact 2>/dev/null || true
             fi
             if [ -f "testng-failed-artifact/testng-failed.xml" ]; then
-              echo "Running only failed tests from previous run..."
+              echo "▶ Running only previously failed tests..."
               mvn test -DsuiteXmlFile=testng-failed-artifact/testng-failed.xml -Denv=${{ matrix.env }} -Dapp.headless=true
             else
-              echo "No failed tests XML found, running all tests..."
+              echo "⚠️  No failed tests XML found — running full suite instead..."
               mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true
             fi
           else
-            mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true
+            # ── INITIAL SCHEDULED / FIRST RUN ───────────────────────────────────
+            echo "========================================================"
+            echo "🚀 PASS 1: Running full test suite..."
+            echo "========================================================"
+            if mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true; then
+              echo "========================================================"
+              echo "✅ PASS 1: All tests passed! Nothing to rerun."
+              echo "========================================================"
+            else
+              echo "========================================================"
+              echo "❌ PASS 1: Test failures detected. Starting automatic rerun of failed cases only..."
+              echo "========================================================"
+              if [ -f "target/surefire-reports/testng-failed.xml" ]; then
+                echo "========================================================"
+                echo "🔄 PASS 2: Rerunning only failed test cases..."
+                echo "========================================================"
+                if mvn test -DsuiteXmlFile=target/surefire-reports/testng-failed.xml -Denv=${{ matrix.env }} -Dapp.headless=true; then
+                  echo "========================================================"
+                  echo "✅ PASS 2: All previously failed tests now pass! Likely flaky — no issue will be raised."
+                  echo "========================================================"
+                else
+                  echo "========================================================"
+                  echo "❌ PASS 2: Rerun still has failures. Raising GitHub issue for investigation..."
+                  echo "========================================================"
+                  exit 1
+                fi
+              else
+                echo "========================================================"
+                echo "❌ PASS 1: Failures found but no testng-failed.xml generated. Raising GitHub issue..."
+                echo "========================================================"
+                exit 1
+              fi
+            fi
           fi
         env:
           GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
@@ -331,7 +371,7 @@ jobs:
 
           echo "Assigning copilot-swe-agent to issue #${ISSUE_NUMBER} via REST API..."
 
-          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"master","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators."}}' "$OWNER" "$REPO" | gh api \
+          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"master","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.","custom_agent":"","model":"claude-sonnet-4-5"}}' "$OWNER" "$REPO" | gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -469,3 +509,42 @@ jobs:
                 core.warning('Failed to create JIRA bug. Check JIRA secrets and project config.');
               }
             }
+
+  auto-verify-on-pr-merge:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for open auto-test-failure issue
+        id: check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'auto-test-failure',
+              state: 'open'
+            });
+            const hasIssue = issues.data.length > 0;
+            core.setOutput('has_open_issue', hasIssue ? 'true' : 'false');
+            if (hasIssue) {
+              console.log(`Found open auto-test-failure issue #${issues.data[0].number} — will trigger verification rerun.`);
+            } else {
+              console.log('No open auto-test-failure issues found. Skipping verification rerun.');
+            }
+
+      - name: Auto-trigger verification rerun
+        if: steps.check.outputs.has_open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+        run: |
+          echo "========================================================"
+          echo "Copilot fix PR #${{ github.event.pull_request.number }} merged — automatically triggering verification rerun..."
+          echo "========================================================"
+          gh workflow run daily-test-fix.yml \
+            --repo ${{ github.repository }} \
+            --ref master \
+            --field rerun_count=1 \
+            --field env=qa
+          echo "Verification rerun dispatched with rerun_count=1."
