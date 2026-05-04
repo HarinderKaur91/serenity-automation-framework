@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    if: false  # disabled — project uses Maven
 
     runs-on: ubuntu-latest
 
