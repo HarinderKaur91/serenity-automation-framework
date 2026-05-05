@@ -79,35 +79,7 @@ jobs:
             PASS1_EXIT=$?
             set -e
 
-            # Write Python helper script to parse failsafe XML reports
-            cat > /tmp/parse_failsafe.py << 'PYEOF'
-            import os, sys, xml.etree.ElementTree as ET
-            mode = sys.argv[1] if len(sys.argv) > 1 else 'count'
-            count = 0
-            classes = set()
-            base = 'target/failsafe-reports'
-            if os.path.isdir(base):
-                for root, dirs, files in os.walk(base):
-                    for f in files:
-                        if f.endswith('.xml') and f.startswith('TEST-'):
-                            try:
-                                tree = ET.parse(os.path.join(root, f))
-                                r = tree.getroot()
-                                count += int(r.get('failures', '0')) + int(r.get('errors', '0')) + int(r.get('skipped', '0'))
-                                for tc in r.findall('testcase'):
-                                    if tc.find('failure') is not None or tc.find('error') is not None or tc.find('skipped') is not None:
-                                        cn = tc.get('classname', '')
-                                        if cn:
-                                            classes.add(cn)
-                            except Exception:
-                                pass
-            if mode == 'count':
-                print(count)
-            else:
-                print(','.join(sorted(classes)))
-            PYEOF
-            # Strip leading 4 spaces of indentation that YAML preserved
-            sed -i 's/^    //' /tmp/parse_failsafe.py
+            PARSER=".github/scripts/parse_failsafe.py"
 
             # Diagnostic: list what's in target/ so we can confirm reports were generated
             echo "── Diagnostic: target/ contents ──"
@@ -117,7 +89,7 @@ jobs:
             echo "── Diagnostic: surefire-reports/ contents ──"
             ls -la target/surefire-reports/ 2>/dev/null || echo "target/surefire-reports/ missing"
 
-            FAILED_COUNT=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+            FAILED_COUNT=$(python3 "$PARSER" count 2>/dev/null || echo 0)
             echo "── Diagnostic: PASS1_EXIT=$PASS1_EXIT FAILED_COUNT=$FAILED_COUNT ──"
 
             if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
@@ -129,7 +101,7 @@ jobs:
               echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/skipped/error count=$FAILED_COUNT). Starting automatic rerun of failed cases only..."
               echo "========================================================"
 
-              FAILED_TESTS=$(python3 /tmp/parse_failsafe.py classes 2>/dev/null || true)
+              FAILED_TESTS=$(python3 "$PARSER" classes 2>/dev/null || true)
               echo "── Diagnostic: FAILED_TESTS='$FAILED_TESTS' ──"
 
               if [ -n "$FAILED_TESTS" ]; then
@@ -142,7 +114,7 @@ jobs:
                 set -e
 
                 # Re-check failsafe reports after rerun
-                PASS2_FAILED=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+                PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
 
                 if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "========================================================"
@@ -163,7 +135,7 @@ jobs:
                 mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true
                 PASS2_EXIT=$?
                 set -e
-                PASS2_FAILED=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+                PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED ──"
                 if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "✅ PASS 2 (fallback): All tests now pass! Likely flaky."
@@ -426,24 +398,29 @@ jobs:
 
       - name: Assign Copilot To Issue
         if: github.event.inputs.rerun_count == '' || github.event.inputs.rerun_count == '0' || github.event.inputs.rerun_count == '1'
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-        run: |
-          ISSUE_NUMBER="${{ steps.issue.outputs.issue_number }}"
-          OWNER="${{ github.repository_owner }}"
-          REPO="${{ github.event.repository.name }}"
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.COPILOT_TOKEN }}
+          script: |
+            const issueNumber = Number('${{ steps.issue.outputs.issue_number }}');
 
-          echo "Assigning copilot-swe-agent to issue #${ISSUE_NUMBER} via REST API..."
+            await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              assignees: ['copilot-swe-agent[bot]'],
+              agent_assignment: {
+                target_repo: `${context.repo.owner}/${context.repo.repo}`,
+                base_branch: 'master',
+                custom_instructions: 'Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.',
+                model: 'claude-sonnet-4-5'
+              },
+              headers: {
+                'X-GitHub-Api-Version': '2022-11-28'
+              }
+            });
 
-          RESPONSE=$(printf '{"assignees":["copilot-swe-agent[bot]"],"agent_assignment":{"target_repo":"%s/%s","base_branch":"master","custom_instructions":"Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.","custom_agent":"","model":"claude-sonnet-4-5"}}' "$OWNER" "$REPO" | gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/${OWNER}/${REPO}/issues/${ISSUE_NUMBER}/assignees" \
-            --input -)
-
-          echo "API Response: ${RESPONSE}"
-          echo "Copilot cloud agent assigned to issue #${ISSUE_NUMBER}."
+            console.log(`Copilot assigned to issue #${issueNumber}`);
 
       - name: Escalate To JIRA - Retries Exhausted
         if: github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0' && github.event.inputs.rerun_count != '1'
