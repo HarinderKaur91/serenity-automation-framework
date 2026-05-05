@@ -174,6 +174,16 @@ jobs:
           path: target/surefire-reports/testng-failed.xml
           if-no-files-found: ignore
 
+      - name: Zip Serenity Report
+        if: always()
+        run: |
+          if [ -d "target/site/serenity" ]; then
+            cd target/site && zip -r serenity-report.zip serenity
+            echo "✅ Zipped Serenity report ($(du -h serenity-report.zip | cut -f1))"
+          else
+            echo "⚠️ Serenity report folder not found"
+          fi
+
       - name: Email Test Reports
         if: always()
         uses: dawidd6/action-send-mail@v3
@@ -196,10 +206,13 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            Serenity report is attached to this email.
+            The full Serenity HTML report is attached as a ZIP. To view:
+              1. Download serenity-report.zip
+              2. Extract it
+              3. Open serenity/index.html in your browser
 
             — Self-Healing Test Framework
-          attachments: target/site/serenity/index.html
+          attachments: target/site/serenity-report.zip
 
   report-success:
     needs: run-tests
@@ -409,12 +422,6 @@ jobs:
               repo: context.repo.repo,
               issue_number: issueNumber,
               assignees: ['copilot-swe-agent[bot]'],
-              agent_assignment: {
-                target_repo: `${context.repo.owner}/${context.repo.repo}`,
-                base_branch: 'master',
-                custom_instructions: 'Analyze the test failures in this issue, identify the root cause in the source code, fix it, and open a PR targeting the master branch. IMPORTANT: Do NOT disable tests using enabled=false. Do NOT skip tests. Do NOT delete test methods. Do NOT change test annotations to skip execution. You must fix the actual test logic or locators.',
-                model: 'claude-sonnet-4-5'
-              },
               headers: {
                 'X-GitHub-Api-Version': '2022-11-28'
               }
