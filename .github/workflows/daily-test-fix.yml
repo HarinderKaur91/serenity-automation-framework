@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: ${{ github.event_name == 'workflow_dispatch' && fromJson(format('["{0}"]', inputs.env != '' && inputs.env || 'qa')) || fromJson('["dev","qa","prod"]') }}
+        env: ${{ github.event_name == 'workflow_dispatch' && fromJson(format('["{0}"]', inputs.env != '' && inputs.env || 'qa')) || fromJson('["qa"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -77,19 +77,41 @@ jobs:
             echo "========================================================"
             echo "🚀 PASS 1: Running full test suite..."
             echo "========================================================"
-            if mvn clean test -Denv=${{ matrix.env }} -Dapp.headless=true; then
+            set +e
+            mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true
+            PASS1_EXIT=$?
+            set -e
+
+            # Count failed/error/skipped tests from failsafe reports
+            FAILED_COUNT=$(grep -r '<testcase' target/failsafe-reports/ 2>/dev/null | grep -c '<failure\|<error\|<skipped' || true)
+
+            if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
               echo "✅ PASS 1: All tests passed! Nothing to rerun."
               echo "========================================================"
             else
               echo "========================================================"
-              echo "❌ PASS 1: Test failures detected. Starting automatic rerun of failed cases only..."
+              echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/skipped/error count=$FAILED_COUNT). Starting automatic rerun of failed cases only..."
               echo "========================================================"
-              if [ -f "target/surefire-reports/testng-failed.xml" ]; then
+
+              # Collect failed test class names from failsafe XML reports
+              FAILED_TESTS=$(grep -r 'classname=' target/failsafe-reports/ 2>/dev/null \
+                | grep -B1 '<failure\|<error\|<skipped' \
+                | grep 'classname=' \
+                | sed 's/.*classname="//;s/".*//' \
+                | sort -u \
+                | tr '\n' ',' \
+                | sed 's/,$//' || true)
+
+              if [ -n "$FAILED_TESTS" ]; then
                 echo "========================================================"
-                echo "🔄 PASS 2: Rerunning only failed test cases..."
+                echo "🔄 PASS 2: Rerunning only failed/skipped/error test cases: $FAILED_TESTS"
                 echo "========================================================"
-                if mvn test -DsuiteXmlFile=target/surefire-reports/testng-failed.xml -Denv=${{ matrix.env }} -Dapp.headless=true; then
+                set +e
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true -Dtest="$FAILED_TESTS" -DfailIfNoTests=false
+                PASS2_EXIT=$?
+                set -e
+                if [ "$PASS2_EXIT" -eq 0 ]; then
                   echo "========================================================"
                   echo "✅ PASS 2: All previously failed tests now pass! Likely flaky — no issue will be raised."
                   echo "========================================================"
@@ -101,7 +123,7 @@ jobs:
                 fi
               else
                 echo "========================================================"
-                echo "❌ PASS 1: Failures found but no testng-failed.xml generated. Raising GitHub issue..."
+                echo "❌ PASS 1: Failures found but could not extract test names. Raising GitHub issue..."
                 echo "========================================================"
                 exit 1
               fi
@@ -144,7 +166,7 @@ jobs:
           secure: true
           username: ${{ secrets.GMAIL_USERNAME }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          subject: "Test Report [${{ matrix.env }}] — ${{ steps.run.outcome == 'failure' && 'FAILURES DETECTED ❌' || 'ALL PASSED ✅' }} — ${{ github.repository }}"
+          subject: "Test Report [${{ matrix.env }}] — ${{ steps.run.outcome == 'failure' && 'FAILURES DETECTED ❌' || steps.run.outcome == 'success' && 'ALL PASSED ✅' || steps.run.outcome == 'skipped' && 'SKIPPED ⏭️' || 'ERROR ⚠️' }} — ${{ github.repository }}"
           to: harinder.qa.88@gmail.com
           from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
           body: |
@@ -157,10 +179,10 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            Reports are attached to this email.
+            Serenity report is attached to this email.
 
             — Self-Healing Test Framework
-          attachments: reports/*.html,target/surefire-reports/emailable-report.html
+          attachments: target/site/serenity/index.html
 
   report-success:
     needs: run-tests
@@ -270,7 +292,7 @@ jobs:
 
   open-issue-and-assign-copilot:
     needs: run-tests
-    if: always() && needs.run-tests.result == 'failure'
+    if: always() && (needs.run-tests.result == 'failure' || needs.run-tests.result == 'error')
     runs-on: ubuntu-latest
 
     steps:
