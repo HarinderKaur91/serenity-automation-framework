@@ -124,6 +124,20 @@ jobs:
               echo "========================================================"
 
               FAILED_TESTS=$(python3 /tmp/parse_failsafe.py classes 2>/dev/null || true)
+
+              if [ -n "$FAILED_TESTS" ]; then
+                echo "========================================================"
+                echo "🔄 PASS 2: Rerunning only failed/skipped/error test cases: $FAILED_TESTS"
+                echo "========================================================"
+                set +e
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true -Dtest="$FAILED_TESTS" -DfailIfNoTests=false
+                PASS2_EXIT=$?
+                set -e
+
+                # Re-check failsafe reports after rerun
+                PASS2_FAILED=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "========================================================"
                   echo "✅ PASS 2: All previously failed tests now pass! Likely flaky — no issue will be raised."
                   echo "========================================================"
@@ -209,7 +223,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
         with:
-          github-token: ${{ secrets.COPILOT_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const rerunCount = '${{ github.event.inputs.rerun_count }}' || '0';
             const isRerun = rerunCount !== '0' && rerunCount !== '';
@@ -421,7 +435,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
         with:
-          github-token: ${{ secrets.COPILOT_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
             const path = require('path');
@@ -549,7 +563,7 @@ jobs:
         id: check
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.COPILOT_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
