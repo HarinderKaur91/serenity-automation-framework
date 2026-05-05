@@ -25,4 +25,9 @@ public class SearchSteps extends UIInteractionSteps {
     public List<String> getSearchResults() {
         return findAll(SearchForm.ARTICLE_HEADINGS).texts();
     }
+
+    @Step("Get the page title")
+    public String getTitle() {
+        return getDriver().getTitle();
+    }
 }

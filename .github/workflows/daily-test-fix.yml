@@ -49,9 +49,6 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Install Playwright Browsers
-        run: mvn org.codehaus.mojo:exec-maven-plugin:3.0.0:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install --with-deps"
-
       - name: Run Tests
         id: run
         run: |
