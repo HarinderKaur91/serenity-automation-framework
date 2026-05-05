@@ -82,23 +82,37 @@ jobs:
             PASS1_EXIT=$?
             set -e
 
-            # Count failed/error/skipped tests from failsafe reports
-            FAILED_COUNT=0
-            if [ -d "target/failsafe-reports" ]; then
-              FAILED_COUNT=$(python3 -c "
-import os, xml.etree.ElementTree as ET
-count = 0
-for root, dirs, files in os.walk('target/failsafe-reports'):
-    for f in files:
-        if f.endswith('.xml') and f.startswith('TEST-'):
-            try:
-                tree = ET.parse(os.path.join(root, f))
-                r = tree.getroot()
-                count += int(r.get('failures','0')) + int(r.get('errors','0')) + int(r.get('skipped','0'))
-            except: pass
-print(count)
-" 2>/dev/null || echo 0)
-            fi
+            # Write Python helper script to parse failsafe XML reports
+            cat > /tmp/parse_failsafe.py << 'PYEOF'
+            import os, sys, xml.etree.ElementTree as ET
+            mode = sys.argv[1] if len(sys.argv) > 1 else 'count'
+            count = 0
+            classes = set()
+            base = 'target/failsafe-reports'
+            if os.path.isdir(base):
+                for root, dirs, files in os.walk(base):
+                    for f in files:
+                        if f.endswith('.xml') and f.startswith('TEST-'):
+                            try:
+                                tree = ET.parse(os.path.join(root, f))
+                                r = tree.getroot()
+                                count += int(r.get('failures', '0')) + int(r.get('errors', '0')) + int(r.get('skipped', '0'))
+                                for tc in r.findall('testcase'):
+                                    if tc.find('failure') is not None or tc.find('error') is not None or tc.find('skipped') is not None:
+                                        cn = tc.get('classname', '')
+                                        if cn:
+                                            classes.add(cn)
+                            except Exception:
+                                pass
+            if mode == 'count':
+                print(count)
+            else:
+                print(','.join(sorted(classes)))
+            PYEOF
+            # Strip leading 4 spaces of indentation that YAML preserved
+            sed -i 's/^    //' /tmp/parse_failsafe.py
+
+            FAILED_COUNT=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
 
             if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
@@ -109,31 +123,7 @@ print(count)
               echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/skipped/error count=$FAILED_COUNT). Starting automatic rerun of failed cases only..."
               echo "========================================================"
 
-              # Collect failed/error/skipped test class names from failsafe XML reports
-              FAILED_TESTS=$(python3 -c "
-import os, xml.etree.ElementTree as ET
-classes = set()
-for root, dirs, files in os.walk('target/failsafe-reports'):
-    for f in files:
-        if f.endswith('.xml') and f.startswith('TEST-'):
-            try:
-                tree = ET.parse(os.path.join(root, f))
-                for tc in tree.getroot().findall('testcase'):
-                    if tc.find('failure') is not None or tc.find('error') is not None or tc.find('skipped') is not None:
-                        classes.add(tc.get('classname',''))
-            except: pass
-print(','.join(c for c in classes if c))
-" 2>/dev/null || true)
-
-              if [ -n "$FAILED_TESTS" ]; then
-                echo "========================================================"
-                echo "🔄 PASS 2: Rerunning only failed/skipped/error test cases: $FAILED_TESTS"
-                echo "========================================================"
-                set +e
-                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true -Dtest="$FAILED_TESTS" -DfailIfNoTests=false
-                PASS2_EXIT=$?
-                set -e
-                if [ "$PASS2_EXIT" -eq 0 ]; then
+              FAILED_TESTS=$(python3 /tmp/parse_failsafe.py classes 2>/dev/null || true)
                   echo "========================================================"
                   echo "✅ PASS 2: All previously failed tests now pass! Likely flaky — no issue will be raised."
                   echo "========================================================"
