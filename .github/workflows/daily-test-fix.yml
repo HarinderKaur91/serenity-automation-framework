@@ -83,7 +83,22 @@ jobs:
             set -e
 
             # Count failed/error/skipped tests from failsafe reports
-            FAILED_COUNT=$(grep -r '<testcase' target/failsafe-reports/ 2>/dev/null | grep -c '<failure\|<error\|<skipped' || true)
+            FAILED_COUNT=0
+            if [ -d "target/failsafe-reports" ]; then
+              FAILED_COUNT=$(python3 -c "
+import os, xml.etree.ElementTree as ET
+count = 0
+for root, dirs, files in os.walk('target/failsafe-reports'):
+    for f in files:
+        if f.endswith('.xml') and f.startswith('TEST-'):
+            try:
+                tree = ET.parse(os.path.join(root, f))
+                r = tree.getroot()
+                count += int(r.get('failures','0')) + int(r.get('errors','0')) + int(r.get('skipped','0'))
+            except: pass
+print(count)
+" 2>/dev/null || echo 0)
+            fi
 
             if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
@@ -94,14 +109,21 @@ jobs:
               echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/skipped/error count=$FAILED_COUNT). Starting automatic rerun of failed cases only..."
               echo "========================================================"
 
-              # Collect failed test class names from failsafe XML reports
-              FAILED_TESTS=$(grep -r 'classname=' target/failsafe-reports/ 2>/dev/null \
-                | grep -B1 '<failure\|<error\|<skipped' \
-                | grep 'classname=' \
-                | sed 's/.*classname="//;s/".*//' \
-                | sort -u \
-                | tr '\n' ',' \
-                | sed 's/,$//' || true)
+              # Collect failed/error/skipped test class names from failsafe XML reports
+              FAILED_TESTS=$(python3 -c "
+import os, xml.etree.ElementTree as ET
+classes = set()
+for root, dirs, files in os.walk('target/failsafe-reports'):
+    for f in files:
+        if f.endswith('.xml') and f.startswith('TEST-'):
+            try:
+                tree = ET.parse(os.path.join(root, f))
+                for tc in tree.getroot().findall('testcase'):
+                    if tc.find('failure') is not None or tc.find('error') is not None or tc.find('skipped') is not None:
+                        classes.add(tc.get('classname',''))
+            except: pass
+print(','.join(c for c in classes if c))
+" 2>/dev/null || true)
 
               if [ -n "$FAILED_TESTS" ]; then
                 echo "========================================================"
@@ -308,7 +330,7 @@ jobs:
         id: issue
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.COPILOT_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
             const path = require('path');
