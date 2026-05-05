@@ -174,14 +174,23 @@ jobs:
           path: target/surefire-reports/testng-failed.xml
           if-no-files-found: ignore
 
-      - name: Zip Serenity Report
+      - name: Locate Serenity Report
         if: always()
+        id: report
         run: |
-          if [ -d "target/site/serenity" ]; then
-            cd target/site && zip -r serenity-report.zip serenity
-            echo "✅ Zipped Serenity report ($(du -h serenity-report.zip | cut -f1))"
+          echo "── Contents of target/site/serenity/ ──"
+          ls -la target/site/serenity/ 2>/dev/null || echo "Folder missing"
+
+          # Serenity single-page report file (self-contained HTML)
+          if [ -f "target/site/serenity/serenity-summary.html" ]; then
+            echo "report_path=target/site/serenity/serenity-summary.html" >> $GITHUB_OUTPUT
+            echo "✅ Found serenity-summary.html"
+          elif [ -f "target/site/serenity/index.html" ]; then
+            echo "report_path=target/site/serenity/index.html" >> $GITHUB_OUTPUT
+            echo "✅ Found index.html (multi-file report)"
           else
-            echo "⚠️ Serenity report folder not found"
+            echo "report_path=" >> $GITHUB_OUTPUT
+            echo "⚠️ No Serenity report found"
           fi
 
       - name: Email Test Reports
@@ -206,13 +215,10 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            The full Serenity HTML report is attached as a ZIP. To view:
-              1. Download serenity-report.zip
-              2. Extract it
-              3. Open serenity/index.html in your browser
+            The Serenity single-page HTML report is attached. Just download and open it in a browser — all styling and data is embedded.
 
             — Self-Healing Test Framework
-          attachments: target/site/serenity-report.zip
+          attachments: ${{ steps.report.outputs.report_path }}
 
   report-success:
     needs: run-tests
