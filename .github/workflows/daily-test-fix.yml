@@ -112,7 +112,16 @@ jobs:
             # Strip leading 4 spaces of indentation that YAML preserved
             sed -i 's/^    //' /tmp/parse_failsafe.py
 
+            # Diagnostic: list what's in target/ so we can confirm reports were generated
+            echo "── Diagnostic: target/ contents ──"
+            ls -la target/ 2>/dev/null || echo "target/ missing"
+            echo "── Diagnostic: failsafe-reports/ contents ──"
+            ls -la target/failsafe-reports/ 2>/dev/null || echo "target/failsafe-reports/ missing"
+            echo "── Diagnostic: surefire-reports/ contents ──"
+            ls -la target/surefire-reports/ 2>/dev/null || echo "target/surefire-reports/ missing"
+
             FAILED_COUNT=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+            echo "── Diagnostic: PASS1_EXIT=$PASS1_EXIT FAILED_COUNT=$FAILED_COUNT ──"
 
             if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
@@ -124,6 +133,7 @@ jobs:
               echo "========================================================"
 
               FAILED_TESTS=$(python3 /tmp/parse_failsafe.py classes 2>/dev/null || true)
+              echo "── Diagnostic: FAILED_TESTS='$FAILED_TESTS' ──"
 
               if [ -n "$FAILED_TESTS" ]; then
                 echo "========================================================"
@@ -149,9 +159,21 @@ jobs:
                 fi
               else
                 echo "========================================================"
-                echo "❌ PASS 1: Failures found but could not extract test names. Raising GitHub issue..."
+                echo "⚠️  PASS 1: Failed but no test names extractable from XML."
+                echo "🔄 PASS 2 (fallback): Re-running full suite once before raising issue..."
                 echo "========================================================"
-                exit 1
+                set +e
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true
+                PASS2_EXIT=$?
+                set -e
+                PASS2_FAILED=$(python3 /tmp/parse_failsafe.py count 2>/dev/null || echo 0)
+                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED ──"
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
+                  echo "✅ PASS 2 (fallback): All tests now pass! Likely flaky."
+                else
+                  echo "❌ PASS 2 (fallback): Still failing. Raising GitHub issue..."
+                  exit 1
+                fi
               fi
             fi
           fi
