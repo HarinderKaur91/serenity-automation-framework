@@ -2,12 +2,13 @@ package starter.actions;
 
 import net.serenitybdd.annotations.Step;
 import net.serenitybdd.core.steps.UIInteractionSteps;
+import org.openqa.selenium.Keys;
 import starter.pageobjects.SearchForm;
 
 import java.time.Duration;
 import java.util.List;
 
-import static org.openqa.selenium.support.ui.ExpectedConditions.presenceOfElementLocated;
+import static org.openqa.selenium.support.ui.ExpectedConditions.titleContains;
 
 public class SearchSteps extends UIInteractionSteps {
 
@@ -15,10 +16,9 @@ public class SearchSteps extends UIInteractionSteps {
 
     @Step("User searches for '{0}'")
     public void searchForTerm(String searchTerm) {
-        find(SearchForm.SEARCH_FIELD).sendKeys(searchTerm);
-        find(SearchForm.SEARCH_BUTTON).click();
+        find(SearchForm.SEARCH_FIELD).sendKeys(searchTerm, Keys.ENTER);
         withTimeoutOf(Duration.ofSeconds(10))
-                .waitFor(presenceOfElementLocated(SearchForm.ARTICLE_HEADINGS));
+                .waitFor(titleContains(searchTerm));
     }
 
     @Step("Check the search results")
