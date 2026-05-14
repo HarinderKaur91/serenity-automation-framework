@@ -18,11 +18,11 @@ public class SearchSteps extends UIInteractionSteps {
         find(SearchForm.SEARCH_FIELD).sendKeys(searchTerm);
         find(SearchForm.SEARCH_BUTTON).click();
         withTimeoutOf(Duration.ofSeconds(10))
-                .waitFor(presenceOfElementLocated(SearchForm.ARTICLE_HEADINGS));
+                .waitFor(presenceOfElementLocated(SearchForm.RESULT_TITLE_LINKS));
     }
 
     @Step("Check the search results")
     public List<String> getSearchResults() {
-        return findAll(SearchForm.ARTICLE_HEADINGS).texts();
+        return findAll(SearchForm.RESULT_TITLE_LINKS).texts();
     }
 }
