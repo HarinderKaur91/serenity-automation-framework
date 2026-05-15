@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Serenity Tests (mvnw clean verify)",
+            "type": "java",
+            "request": "launch",
+            "mainClass": "starter.acceptancetests.WhenSearchingForTerms",
+            "projectName": "serenity-junit-starter",
+            "preLaunchTask": "Maven: clean verify"
+        }
+    ]
+}
