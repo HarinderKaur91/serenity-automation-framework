@@ -13,18 +13,18 @@ public class LoginPage extends PageObject {
     public static final By ERROR_MESSAGE = By.cssSelector("[data-test='error']");
 
     public void enterUsername(String username) {
-        $(USERNAME).type(username);
+        $(USERNAME).waitUntilEnabled().type(username);
     }
 
     public void enterPassword(String password) {
-        $(PASSWORD).type(password);
+        $(PASSWORD).waitUntilEnabled().type(password);
     }
 
     public void clickLogin() {
-        $(LOGIN_BUTTON).click();
+        $(LOGIN_BUTTON).waitUntilEnabled().click();
     }
 
     public String getErrorMessage() {
-        return $(ERROR_MESSAGE).getText();
+        return $(ERROR_MESSAGE).waitUntilVisible().getText();
     }
 }

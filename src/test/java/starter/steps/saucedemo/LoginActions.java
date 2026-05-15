@@ -16,6 +16,9 @@ public class LoginActions {
     @Step("Open the SauceDemo login page")
     public void openLoginPage() {
         loginPage.open();
+        loginPage.getDriver().manage().deleteAllCookies();
+        loginPage.evaluateJavascript("window.localStorage.clear(); window.sessionStorage.clear();");
+        loginPage.open();
     }
 
     @Step("Log in as {0}")
