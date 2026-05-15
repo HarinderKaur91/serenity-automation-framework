@@ -104,6 +104,22 @@ jobs:
             FAILED_COUNT=$(python3 "$PARSER" count 2>/dev/null || echo 0)
             echo "── Diagnostic: PASS1_EXIT=$PASS1_EXIT FAILED_COUNT=$FAILED_COUNT ──"
 
+            # ── Snapshot PASS 1 reports BEFORE any PASS 2 `mvn clean` wipes them.
+            # The email is sent from this snapshot so the user always sees the
+            # original (PASS 1) result set, not just the rerun subset.
+            mkdir -p pass1-reports
+            if [ -d "target/site/serenity" ]; then
+              cp -r target/site/serenity pass1-reports/serenity
+              echo "📸 Snapshotted PASS 1 Serenity report → pass1-reports/serenity"
+            fi
+            if [ -d "target/failsafe-reports" ]; then
+              cp -r target/failsafe-reports pass1-reports/failsafe-reports
+              echo "📸 Snapshotted PASS 1 failsafe reports → pass1-reports/failsafe-reports"
+            fi
+            if [ -f "target/rerun.txt" ]; then
+              cp target/rerun.txt pass1-reports/rerun.txt
+            fi
+
             if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
               echo "✅ PASS 1: All tests passed! Nothing to rerun."
@@ -123,9 +139,11 @@ jobs:
 
                 # Stash the rerun file because `mvn clean` would delete it,
                 # then convert lines to a comma-separated value for cucumber.features.
-                # Strip any leading `file:` prefix that older Cucumber versions emit.
+                # Strip any leading `file:` prefix that older Cucumber versions emit,
+                # and prepend `./` so paths are unambiguously resolved relative to CWD
+                # (otherwise Cucumber discovery can silently produce 0 tests).
                 cp target/rerun.txt rerun.txt
-                FAILED_FEATURES=$(sed 's/^file://' rerun.txt | paste -sd,)
+                FAILED_FEATURES=$(sed 's|^file:||; s|^|./|' rerun.txt | paste -sd,)
                 echo "🔄 PASS 2: cucumber.features=$FAILED_FEATURES"
 
                 set +e
@@ -183,6 +201,7 @@ jobs:
           name: test-reports-${{ matrix.env }}
           path: |
             test-outcome.txt
+            pass1-reports/
             target/failsafe-reports/
             target/site/serenity/
             target/rerun.txt
@@ -192,16 +211,25 @@ jobs:
         if: always()
         id: report
         run: |
+          echo "── Contents of pass1-reports/serenity/ ──"
+          ls -la pass1-reports/serenity/ 2>/dev/null || echo "PASS 1 snapshot missing"
           echo "── Contents of target/site/serenity/ ──"
-          ls -la target/site/serenity/ 2>/dev/null || echo "Folder missing"
+          ls -la target/site/serenity/ 2>/dev/null || echo "target/site/serenity/ missing"
 
-          # Serenity single-page report file (self-contained HTML)
-          if [ -f "target/site/serenity/serenity-summary.html" ]; then
+          # Prefer the PASS 1 snapshot so the email always reflects the original
+          # (full) test run, not the rerun subset from PASS 2.
+          if [ -f "pass1-reports/serenity/serenity-summary.html" ]; then
+            echo "report_path=pass1-reports/serenity/serenity-summary.html" >> $GITHUB_OUTPUT
+            echo "✅ Using PASS 1 snapshot: pass1-reports/serenity/serenity-summary.html"
+          elif [ -f "pass1-reports/serenity/index.html" ]; then
+            echo "report_path=pass1-reports/serenity/index.html" >> $GITHUB_OUTPUT
+            echo "✅ Using PASS 1 snapshot: pass1-reports/serenity/index.html"
+          elif [ -f "target/site/serenity/serenity-summary.html" ]; then
             echo "report_path=target/site/serenity/serenity-summary.html" >> $GITHUB_OUTPUT
-            echo "✅ Found serenity-summary.html"
+            echo "⚠️ PASS 1 snapshot missing, falling back to current target/site/serenity/serenity-summary.html"
           elif [ -f "target/site/serenity/index.html" ]; then
             echo "report_path=target/site/serenity/index.html" >> $GITHUB_OUTPUT
-            echo "✅ Found index.html (multi-file report)"
+            echo "⚠️ PASS 1 snapshot missing, falling back to current target/site/serenity/index.html"
           else
             echo "report_path=" >> $GITHUB_OUTPUT
             echo "⚠️ No Serenity report found"
@@ -377,16 +405,70 @@ jobs:
             body += `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n`;
             body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
 
-            const files = walk('artifacts').filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
+            const allFiles = walk('artifacts');
 
-            for (const file of files.slice(0, 8)) {
-              const content = fs.readFileSync(file, 'utf8').slice(0, 3000);
-              if (
-                content.includes('FAILURE') ||
-                content.includes('ERROR') ||
-                content.includes('<failure')
-              ) {
-                body += `### ${path.basename(file)}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+            // ── 1. Failed scenario locations from Cucumber rerun.txt ─────────
+            const rerunFile = allFiles.find(f => f.endsWith('rerun.txt'));
+            const failedLocations = rerunFile
+              ? fs.readFileSync(rerunFile, 'utf8')
+                  .split(/\r?\n/).map(s => s.replace(/^file:/, '').trim()).filter(Boolean)
+              : [];
+
+            // ── 2. Parse failsafe XML for scenario name + failure message ────
+            const xmlFiles = allFiles.filter(f => /TEST-.*\.xml$/.test(f));
+            const failures = []; // { scenario, classname, message, type, stack, location }
+
+            for (const xml of xmlFiles) {
+              const content = fs.readFileSync(xml, 'utf8');
+              const caseRegex = /<testcase\b[^>]*\bname="([^"]+)"[^>]*\bclassname="([^"]+)"[^>]*>([\s\S]*?)<\/testcase>/g;
+              let m;
+              while ((m = caseRegex.exec(content)) !== null) {
+                const [, name, classname, inner] = m;
+                const failMatch = inner.match(/<(failure|error)\b[^>]*\bmessage="([^"]*)"[^>]*\btype="([^"]*)"[^>]*>([\s\S]*?)<\/\1>/);
+                if (!failMatch) continue;
+                const [, , message, type, stackRaw] = failMatch;
+                const stack = stackRaw
+                  .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
+                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+                  .trim();
+                failures.push({ scenario: name, classname, message, type, stack });
+              }
+            }
+
+            // ── 3. Render structured issue body ──────────────────────────────
+            if (failedLocations.length) {
+              body += `### Failed Feature Locations\n\n`;
+              for (const loc of failedLocations) body += `- \`${loc}\`\n`;
+              body += `\n`;
+            }
+
+            if (failures.length) {
+              body += `### Failed Scenarios (${failures.length})\n\n`;
+              for (const f of failures.slice(0, 10)) {
+                body += `#### ❌ ${f.scenario}\n`;
+                body += `- **Class:** \`${f.classname}\`\n`;
+                body += `- **Error type:** \`${f.type}\`\n`;
+                body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
+                // Extract failed step from stack: Cucumber stack lines often look like
+                //   at ✽.<step text>(file:src/...feature:NN)
+                const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                if (stepLines.length) {
+                  body += `**Failed step(s):**\n`;
+                  for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
+                  body += `\n`;
+                }
+                const trimmedStack = f.stack.split('\n').slice(0, 25).join('\n');
+                body += `<details><summary>Stack trace</summary>\n\n\`\`\`\n${trimmedStack}\n\`\`\`\n\n</details>\n\n`;
+              }
+              if (failures.length > 10) body += `_…and ${failures.length - 10} more failure(s) — see full reports in workflow artifacts._\n\n`;
+            } else {
+              // Fallback: dump raw report files if XML parsing yielded nothing
+              const reportFiles = allFiles.filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
+              for (const file of reportFiles.slice(0, 5)) {
+                const content = fs.readFileSync(file, 'utf8').slice(0, 3000);
+                if (content.includes('FAILURE') || content.includes('ERROR') || content.includes('<failure')) {
+                  body += `### ${path.basename(file)}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+                }
               }
             }
 
