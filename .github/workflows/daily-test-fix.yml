@@ -512,8 +512,8 @@ jobs:
 
             const runUrl     = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const ghIssueUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}`;
-            const env        = '${{ github.event.inputs.env || ''qa'' }}';
-            const site       = '${{ github.event.inputs.site || ''all'' }}';
+            const env        = "${{ github.event.inputs.env || 'qa' }}";
+            const site       = "${{ github.event.inputs.site || 'all' }}";
 
             // ── Build Atlassian Document Format (ADF) description ────────────
             const heading = (text, level = 2) => ({ type: 'heading', attrs: { level }, content: [{ type: 'text', text }] });
