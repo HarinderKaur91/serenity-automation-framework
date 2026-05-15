@@ -235,6 +235,24 @@ jobs:
             echo "⚠️ No Serenity report found"
           fi
 
+          # Build a zip of the full multi-file Serenity report so the recipient
+          # can unzip and open index.html with all styling/screenshots intact.
+          REPORT_DIR=""
+          if [ -d "pass1-reports/serenity" ]; then
+            REPORT_DIR="pass1-reports/serenity"
+          elif [ -d "target/site/serenity" ]; then
+            REPORT_DIR="target/site/serenity"
+          fi
+
+          if [ -n "$REPORT_DIR" ]; then
+            ZIP_PATH="serenity-full-report-${{ matrix.env }}.zip"
+            (cd "$REPORT_DIR/.." && zip -qr "$OLDPWD/$ZIP_PATH" "$(basename $REPORT_DIR)")
+            echo "report_zip=$ZIP_PATH" >> $GITHUB_OUTPUT
+            echo "📦 Zipped full report → $ZIP_PATH ($(du -h $ZIP_PATH | cut -f1))"
+          else
+            echo "report_zip=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Email Test Reports
         if: always()
         uses: dawidd6/action-send-mail@v3
@@ -257,10 +275,12 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            The Serenity single-page HTML report is attached. Just download and open it in a browser — all styling and data is embedded.
+            Two reports are attached:
+              1. serenity-summary.html  — self-contained single-page summary, open directly in a browser.
+              2. serenity-full-report-${{ matrix.env }}.zip — unzip and open index.html for the full multi-page report (scenarios, steps, screenshots).
 
             — Self-Healing Test Framework
-          attachments: ${{ steps.report.outputs.report_path }}
+          attachments: ${{ steps.report.outputs.report_path }},${{ steps.report.outputs.report_zip }}
 
   report-success:
     needs: run-tests
@@ -766,33 +786,3 @@ jobs:
             --field rerun_count=1 \
             --field env=qa
           echo "Verification rerun dispatched with rerun_count=1."
-
-  auto-merge-on-approval:
-    if: >-
-      github.event_name == 'pull_request_review'
-      && github.event.review.state == 'approved'
-      && contains(github.event.pull_request.labels.*.name, 'auto-test-failure')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enable auto-merge for approved Copilot PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          echo "========================================================"
-          echo "✅ PR #${PR_NUMBER} approved by ${{ github.event.review.user.login }} — enabling auto-merge..."
-          echo "========================================================"
-          # Squash-merge once required checks pass
-          gh pr merge "$PR_NUMBER" \
-            --repo ${{ github.repository }} \
-            --squash \
-            --auto \
-            --delete-branch || {
-              echo "⚠️ gh pr merge --auto failed (likely no required checks configured)."
-              echo "   Falling back to immediate squash merge..."
-              gh pr merge "$PR_NUMBER" \
-                --repo ${{ github.repository }} \
-                --squash \
-                --delete-branch
-            }
-          echo "PR #${PR_NUMBER} queued for auto-merge."

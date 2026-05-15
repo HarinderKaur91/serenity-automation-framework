@@ -15,8 +15,9 @@ permissions:
 jobs:
   auto-merge:
     if: >-
+      github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
-      contains(fromJSON('["copilot-swe-agent[bot]","copilot[bot]","github-copilot[bot]","copilot"]'), github.event.pull_request.user.login)
+      startsWith(github.event.pull_request.head.ref, 'copilot/')
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -183,7 +184,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'daily-test-fix.yml',
-              ref: 'main',
+              ref: 'master',
               inputs: {
                 rerun_count: String(rerunCount)
               }
@@ -195,7 +196,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.action == 'closed' &&
       github.event.pull_request.merged == false &&
-      contains(fromJSON('["copilot-swe-agent[bot]","copilot[bot]","github-copilot[bot]","copilot"]'), github.event.pull_request.user.login)
+      startsWith(github.event.pull_request.head.ref, 'copilot/')
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
