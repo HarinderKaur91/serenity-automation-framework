@@ -10,11 +10,11 @@ public class ProductDetailPage extends PageObject {
     public static final By ADD_TO_CART = By.id("product-addtocart-button");
 
     public String productName() {
-        return $(PRODUCT_NAME).waitUntilVisible().getText();
+        return $(PRODUCT_NAME).waitUntilVisible().getDomProperty("textContent").trim();
     }
 
     public String price() {
-        return $(PRICE).waitUntilVisible().getText();
+        return $(PRICE).waitUntilVisible().getDomProperty("textContent").trim();
     }
 
     public boolean addToCartIsAvailable() {

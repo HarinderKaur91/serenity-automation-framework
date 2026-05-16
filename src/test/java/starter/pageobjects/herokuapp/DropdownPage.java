@@ -16,6 +16,8 @@ public class DropdownPage extends PageObject {
 
     public String selectedOption() {
         return new Select(getDriver().findElement(DROPDOWN))
-                .getFirstSelectedOption().getText();
+                .getFirstSelectedOption()
+                .getDomProperty("textContent")
+                .trim();
     }
 }
