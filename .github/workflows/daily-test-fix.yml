@@ -424,27 +424,36 @@ jobs:
 
             let body = `## Automated Test Failure\n\n`;
             body += `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n`;
+            body += `> ⚠️ **These are PASS 2 (post-rerun) failures only** — scenarios that failed in the initial run AND still failed after the automatic selective rerun. Flaky scenarios that passed on rerun are excluded.\n\n`;
             body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
 
             const allFiles = walk('artifacts');
+            console.log(`Total artifact files found: ${allFiles.length}`);
+            console.log(`All XML files in artifacts: ${allFiles.filter(f => /TEST-.*\.xml$/.test(f)).join('\n  ')}`);
 
             // ── 1. Failed scenario locations from Cucumber rerun.txt ─────────
-            const rerunFile = allFiles.find(f => f.endsWith('rerun.txt'));
+            // Prefer PASS 2's rerun.txt (target/rerun.txt) over the PASS 1 snapshot.
+            // Both list the same failed scenarios, but PASS 2 is the authoritative source.
+            const rerunFile =
+              allFiles.find(f => f.includes('target') && f.endsWith('rerun.txt')) ||
+              allFiles.find(f => !f.includes('pass1-reports') && f.endsWith('rerun.txt')) ||
+              allFiles.find(f => f.endsWith('rerun.txt'));
             const failedLocations = rerunFile
               ? fs.readFileSync(rerunFile, 'utf8')
                   .split(/\r?\n/).map(s => s.replace(/^file:/, '').trim()).filter(Boolean)
               : [];
+            console.log(`Using rerun.txt: ${rerunFile || 'none'} (${failedLocations.length} entries)`);
 
             // ── 2. Parse failsafe XML for scenario name + failure message ────
-            // Use PASS 2 results (artifacts/failsafe-reports/) which contain only
-            // the scenarios that STILL FAIL after the rerun. These are the persistent
-            // failures that need to be fixed.
+            // Use PASS 2 results ONLY — exclude pass1-reports snapshot so we only
+            // show scenarios that STILL FAIL after the rerun (persistent failures).
             const xmlFiles = allFiles.filter(f => 
               f.includes('failsafe-reports') && 
               !f.includes('pass1-reports') && 
               /TEST-.*\.xml$/.test(f)
             );
-            console.log(`Found ${xmlFiles.length} PASS 2 failsafe XML files for parsing.`);
+            console.log(`PASS 2 failsafe XML files (after excluding pass1-reports): ${xmlFiles.length}`);
+            console.log(`  Files: ${xmlFiles.join('\n  ')}`);
             
             const failures = []; // { scenario, classname, message, type, stack, location }
 
@@ -473,7 +482,7 @@ jobs:
             }
 
             if (failures.length) {
-              body += `### Failed Scenarios (${failures.length})\n\n`;
+              body += `### Persistent Failures After Rerun — PASS 2 (${failures.length} scenario(s) still failing)\n\n`;
               for (const f of failures.slice(0, 10)) {
                 body += `#### ❌ ${f.scenario}\n`;
                 body += `- **Class:** \`${f.classname}\`\n`;
