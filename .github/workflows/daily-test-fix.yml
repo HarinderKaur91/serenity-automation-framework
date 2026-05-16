@@ -502,21 +502,42 @@ jobs:
 
             if (failures.length) {
               body += `### Persistent Failures After Rerun — PASS 2 (${failures.length} scenario(s) still failing)\n\n`;
-              for (const f of failures.slice(0, 10)) {
-                body += `#### ❌ ${f.scenario}\n`;
-                body += `- **Class:** \`${f.classname}\`\n`;
-                body += `- **Error type:** \`${f.type}\`\n`;
-                body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
-                // Extract failed step from stack: Cucumber stack lines often look like
-                //   at ✽.<step text>(file:src/...feature:NN)
-                const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
-                if (stepLines.length) {
-                  body += `**Failed step(s):**\n`;
-                  for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
-                  body += `\n`;
+              
+              // Extract unique feature files from failedLocations
+              // e.g., "src/test/resources/features/saucedemo/login.feature:7" → "login.feature"
+              const featureMap = new Map(); // feature file → [failures]
+              for (const f of failures) {
+                // Try to find matching feature file from failedLocations
+                const matchingLoc = failedLocations.find(loc => f.classname.includes(f.scenario));
+                const featureName = matchingLoc
+                  ? matchingLoc.split('/').pop().split(':')[0]  // "login.feature:7" → "login.feature"
+                  : 'Unknown Feature';
+                
+                if (!featureMap.has(featureName)) {
+                  featureMap.set(featureName, []);
                 }
-                const trimmedStack = f.stack.split('\n').slice(0, 25).join('\n');
-                body += `<details><summary>Stack trace</summary>\n\n\`\`\`\n${trimmedStack}\n\`\`\`\n\n</details>\n\n`;
+                featureMap.get(featureName).push(f);
+              }
+
+              // Render grouped by feature file
+              for (const [featureName, featureFailures] of featureMap.entries()) {
+                body += `#### 📄 ${featureName}\n\n`;
+                for (const f of featureFailures.slice(0, 10)) {
+                  body += `**❌ ${f.scenario}**\n`;
+                  body += `- **Class:** \`${f.classname}\`\n`;
+                  body += `- **Error type:** \`${f.type}\`\n`;
+                  body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
+                  // Extract failed step from stack: Cucumber stack lines often look like
+                  //   at ✽.<step text>(file:src/...feature:NN)
+                  const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                  if (stepLines.length) {
+                    body += `**Failed step(s):**\n`;
+                    for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
+                    body += `\n`;
+                  }
+                  const trimmedStack = f.stack.split('\n').slice(0, 25).join('\n');
+                  body += `<details><summary>Stack trace</summary>\n\n\`\`\`\n${trimmedStack}\n\`\`\`\n\n</details>\n\n`;
+                }
               }
               if (failures.length > 10) body += `_…and ${failures.length - 10} more failure(s) — see full reports in workflow artifacts._\n\n`;
             } else {
