@@ -7,21 +7,19 @@ import org.openqa.selenium.By;
 @DefaultUrl("https://magento.softwaretestingboard.com/")
 public class MagentoHomePage extends PageObject {
 
-    public static final By SEARCH_FIELD = By.cssSelector("#search, input[name='q']");
+    public static final By SEARCH_FIELD = By.id("search");
+    public static final By SEARCH_FIELD_FALLBACK = By.cssSelector("input[name='q']");
     public static final By PRODUCT_RESULTS = By.cssSelector(".product-item-name a");
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
 
     public void searchFor(String term) {
-        $(SEARCH_FIELD).waitUntilVisible().type(term).then().sendKeys(org.openqa.selenium.Keys.ENTER);
+        By activeSearchField = findAll(SEARCH_FIELD).isEmpty() ? SEARCH_FIELD_FALLBACK : SEARCH_FIELD;
+        $(activeSearchField).waitUntilVisible().type(term).then().sendKeys(org.openqa.selenium.Keys.ENTER);
     }
 
     public java.util.List<String> getProductResults() {
         $(PRODUCT_RESULTS).waitUntilVisible();
-        java.util.List<net.serenitybdd.core.pages.WebElementFacade> results = findAll(PRODUCT_RESULTS);
-        if (results == null) {
-            return java.util.List.of();
-        }
-        return results.stream()
+        return findAll(PRODUCT_RESULTS).stream()
                 .map(e -> e.getDomProperty("textContent"))
                 .filter(java.util.Objects::nonNull)
                 .map(String::trim)

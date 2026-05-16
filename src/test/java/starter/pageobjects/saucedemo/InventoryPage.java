@@ -14,11 +14,7 @@ public class InventoryPage extends PageObject {
     }
 
     public java.util.List<String> getProductTitles() {
-        java.util.List<net.serenitybdd.core.pages.WebElementFacade> productTitles = findAll(PRODUCT_TITLES);
-        if (productTitles == null) {
-            return java.util.List.of();
-        }
-        return productTitles.stream()
+        return findAll(PRODUCT_TITLES).stream()
                 .map(e -> e.getDomProperty("textContent"))
                 .filter(java.util.Objects::nonNull)
                 .map(String::trim)

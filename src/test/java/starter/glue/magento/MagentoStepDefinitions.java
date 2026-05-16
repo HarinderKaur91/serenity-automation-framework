@@ -6,8 +6,6 @@ import io.cucumber.java.en.When;
 import net.serenitybdd.annotations.Steps;
 import starter.steps.magento.MagentoSearchActions;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class MagentoStepDefinitions {
@@ -27,8 +25,7 @@ public class MagentoStepDefinitions {
 
     @Then("at least one product result should mention {string}")
     public void resultShouldMention(String term) {
-        List<String> results = magentoSearchActions.productResults();
-        assertThat(results == null ? List.<String>of() : results)
+        assertThat(magentoSearchActions.productResults())
                 .anyMatch(text -> text.toLowerCase().contains(term.toLowerCase()));
     }
 
