@@ -276,9 +276,18 @@ jobs:
               return out;
             }
             const allFiles = walk('artifacts');
-            const screenshots = allFiles.filter(f =>
-              /\.(png|jpe?g)$/i.test(f) && !path.basename(f).startsWith('thumbnail_')
-            ).slice(0, 5);
+            // Exclude Serenity report asset icons (android-icon-*, favicon-*, etc.)
+            // and only keep actual test failure screenshots from the screenshots/ folder
+            const screenshots = allFiles.filter(f => {
+              const base = path.basename(f);
+              return /\.(png|jpe?g)$/i.test(f)
+                && !base.startsWith('thumbnail_')
+                && !base.startsWith('android-icon-')
+                && !base.startsWith('favicon-')
+                && !base.startsWith('apple-icon-')
+                && f.includes('screenshots');
+            }).slice(0, 5);
+            console.log(`Screenshots found: ${screenshots.length} — ${screenshots.map(f => path.basename(f)).join(', ')}`);
 
             // Failed feature locations from rerun.txt
             const rerunFile = allFiles.find(f => f.endsWith('rerun.txt'));
@@ -409,6 +418,7 @@ jobs:
               return;
             }
             console.log(`🐛 JIRA Bug created: ${data.key}`);
+            console.log(`🔗 View in JIRA: ${jiraBase}/browse/${data.key}`);
             core.setOutput('jira_key', data.key);
 
             // ── Attach screenshots ─────────────────────────────────────────
@@ -433,34 +443,47 @@ jobs:
             }
 
       - name: Label and Comment on GitHub Issue
-        if: steps.extract.outputs.issue_number != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.COPILOT_TOKEN }}
           script: |
-            const issueNumber = Number('${{ steps.extract.outputs.issue_number }}');
-            const prNumber = '${{ steps.extract.outputs.pr_number }}';
-            const jiraKey  = '${{ steps.jira.outputs.jira_key }}';
-            const jiraBase = '${{ secrets.JIRA_BASE_URL }}';
+            const issueNumber = '${{ steps.extract.outputs.issue_number }}';
+            const prNumber    = '${{ steps.extract.outputs.pr_number }}';
+            const jiraKey     = '${{ steps.jira.outputs.jira_key }}';
+            const jiraBase    = '${{ secrets.JIRA_BASE_URL }}';
             const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
-            try {
-              await github.rest.issues.addLabels({
-                owner, repo,
-                issue_number: issueNumber,
-                labels: ['needs-manual-fix']
-              });
-            } catch (e) {
-              console.log(`Could not add label: ${e.message}`);
-            }
+            const repo  = context.repo.repo;
 
             const jiraLine = jiraKey
               ? `🔗 JIRA defect created: [${jiraKey}](${jiraBase}/browse/${jiraKey})`
               : '⚠️ JIRA defect creation failed — check workflow logs.';
 
+            // Always comment on the PR itself so the JIRA link is always visible
             await github.rest.issues.createComment({
               owner, repo,
-              issue_number: issueNumber,
-              body: `⚠️ **Copilot fix PR #${prNumber} was rejected** (closed without merging).\n\nThe automated fix was insufficient. No verification rerun will be triggered. This issue has been escalated to JIRA for manual investigation.\n\n${jiraLine}\n\nLabel \`needs-manual-fix\` has been added.`
+              issue_number: Number(prNumber),
+              body: `⚠️ **This Copilot fix PR was closed without merging.**\n\nThe automated fix was insufficient. No verification rerun will be triggered. This failure has been escalated to JIRA for manual investigation.\n\n${jiraLine}`
             });
+            console.log(`Commented on PR #${prNumber} with JIRA link.`);
+
+            // Also comment on the linked GitHub issue if we have one
+            if (issueNumber) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner, repo,
+                  issue_number: Number(issueNumber),
+                  labels: ['needs-manual-fix']
+                });
+              } catch (e) {
+                console.log(`Could not add label: ${e.message}`);
+              }
+
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number: Number(issueNumber),
+                body: `⚠️ **Copilot fix PR #${prNumber} was rejected** (closed without merging).\n\nThe automated fix was insufficient. No verification rerun will be triggered. This issue has been escalated to JIRA for manual investigation.\n\n${jiraLine}\n\nLabel \`needs-manual-fix\` has been added.`
+              });
+              console.log(`Commented on issue #${issueNumber} with JIRA link.`);
+            } else {
+              console.log('No linked issue number found — skipping issue comment.');
+            }

@@ -439,10 +439,12 @@ jobs:
               allFiles.find(f => !f.includes('pass1-reports') && f.endsWith('rerun.txt')) ||
               allFiles.find(f => f.endsWith('rerun.txt'));
             const failedLocations = rerunFile
-              ? fs.readFileSync(rerunFile, 'utf8')
-                  .split(/\r?\n/).map(s => s.replace(/^file:/, '').trim()).filter(Boolean)
+              ? [...new Set(
+                  fs.readFileSync(rerunFile, 'utf8')
+                    .split(/\r?\n/).map(s => s.replace(/^file:/, '').trim()).filter(Boolean)
+                )]
               : [];
-            console.log(`Using rerun.txt: ${rerunFile || 'none'} (${failedLocations.length} entries)`);
+            console.log(`Using rerun.txt: ${rerunFile || 'none'} (${failedLocations.length} unique entries)`);
 
             // ── 2. Parse failsafe XML for scenario name + failure message ────
             // Use PASS 2 results ONLY — exclude pass1-reports snapshot so we only
@@ -473,6 +475,23 @@ jobs:
                 failures.push({ scenario: name, classname, message, type, stack });
               }
             }
+
+            // ── Dedupe failures by scenario+classname ────────────────────────
+            // Cucumber + JUnit5 + Failsafe can emit the same scenario in multiple
+            // XML files (e.g., suite-level + per-feature reporter). Keep only one
+            // entry per unique scenario.
+            const beforeDedupe = failures.length;
+            const seen = new Set();
+            const uniqueFailures = [];
+            for (const f of failures) {
+              const key = `${f.classname}::${f.scenario}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              uniqueFailures.push(f);
+            }
+            console.log(`Failures: ${beforeDedupe} raw → ${uniqueFailures.length} unique after dedupe`);
+            failures.length = 0;
+            failures.push(...uniqueFailures);
 
             // ── 3. Render structured issue body ──────────────────────────────
             if (failedLocations.length) {
@@ -610,9 +629,18 @@ jobs:
             }
             const allFiles = walk('artifacts');
             const reportFiles = allFiles.filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
-            const screenshots = allFiles.filter(f =>
-              /\.(png|jpe?g)$/i.test(f) && !path.basename(f).startsWith('thumbnail_')
-            ).slice(0, 5); // cap at 5 to avoid huge JIRA tickets
+            // Exclude Serenity report asset icons (android-icon-*, favicon-*, etc.)
+            // and only keep actual test failure screenshots from the screenshots/ folder
+            const screenshots = allFiles.filter(f => {
+              const base = path.basename(f);
+              return /\.(png|jpe?g)$/i.test(f)
+                && !base.startsWith('thumbnail_')
+                && !base.startsWith('android-icon-')
+                && !base.startsWith('favicon-')
+                && !base.startsWith('apple-icon-')
+                && f.includes('screenshots');
+            }).slice(0, 5); // cap at 5 to avoid huge JIRA tickets
+            console.log(`Screenshots found: ${screenshots.length} — ${screenshots.map(f => path.basename(f)).join(', ')}`);
 
             // ── Extract failed scenarios from rerun.txt or failsafe XML ─────
             let failedScenarios = [];
@@ -739,6 +767,7 @@ jobs:
               }
               jiraKey = jiraData.key;
               console.log(`🐛 JIRA Bug created: ${jiraKey}`);
+              console.log(`🔗 View in JIRA: ${jiraBase}/browse/${jiraKey}`);
 
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
