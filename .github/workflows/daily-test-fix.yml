@@ -762,10 +762,11 @@ jobs:
         run: |
           echo "========================================================"
           echo "Copilot fix PR #${{ github.event.pull_request.number }} merged — triggering verification rerun..."
+          echo "If this rerun also fails, the failure will be escalated directly to JIRA."
           echo "========================================================"
           gh workflow run daily-test-fix.yml \
             --repo ${{ github.repository }} \
             --ref master \
-            --field rerun_count=1 \
+            --field rerun_count=2 \
             --field env=qa
-          echo "✅ Verification rerun dispatched with rerun_count=1."
+          echo "✅ Verification rerun dispatched with rerun_count=2 (final attempt before JIRA escalation)."
