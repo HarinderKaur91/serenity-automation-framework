@@ -3,6 +3,9 @@ package starter.pageobjects.herokuapp;
 import net.serenitybdd.annotations.DefaultUrl;
 import net.serenitybdd.core.pages.PageObject;
 import org.openqa.selenium.By;
+import org.openqa.selenium.support.ui.WebDriverWait;
+
+import java.time.Duration;
 
 @DefaultUrl("https://the-internet.herokuapp.com/upload")
 public class FileUploadPage extends PageObject {
@@ -20,6 +23,10 @@ public class FileUploadPage extends PageObject {
     }
 
     public String uploadedFileName() {
-        return $(UPLOADED_FILES).waitUntilVisible().getText();
+        return new WebDriverWait(getDriver(), Duration.ofSeconds(10))
+                .until(driver -> {
+                    String text = driver.findElement(UPLOADED_FILES).getText().trim();
+                    return text.isEmpty() ? null : text;
+                });
     }
 }
