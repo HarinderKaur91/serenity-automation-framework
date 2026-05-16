@@ -19,11 +19,6 @@ public class DropdownPage extends PageObject {
                 .until(driver -> driver.findElement(DROPDOWN));
         Select select = new Select(dropdown);
         select.selectByVisibleText(text);
-        new WebDriverWait(getDriver(), Duration.ofSeconds(10))
-                .until(driver -> text.equalsIgnoreCase(new Select(driver.findElement(DROPDOWN))
-                        .getFirstSelectedOption()
-                        .getText()
-                        .trim()));
     }
 
     public String selectedOption() {

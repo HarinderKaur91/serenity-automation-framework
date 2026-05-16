@@ -13,7 +13,7 @@ import java.util.List;
 @DefaultUrl("https://magento.softwaretestingboard.com/")
 public class MagentoHomePage extends PageObject {
 
-    public static final By SEARCH_FIELD = By.cssSelector("#search, input[name='q']");
+    public static final By SEARCH_FIELD = By.cssSelector("input[name='q']");
     public static final By PRODUCT_RESULTS = By.cssSelector(".product-item-link");
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
 
@@ -49,7 +49,7 @@ public class MagentoHomePage extends PageObject {
 
     public String getPageTitleText() {
         List<WebElement> pageTitles = getDriver().findElements(PAGE_TITLE);
-        if (pageTitles != null && !pageTitles.isEmpty()) {
+        if (!pageTitles.isEmpty()) {
             String titleText = pageTitles.get(0).getText().trim();
             if (!titleText.isEmpty()) {
                 return titleText;
