@@ -27,4 +27,31 @@ jobs:
         restore-keys: ${{ runner.os }}-m2
 
     - name: Build with Maven
-      run: mvn -B verify --file pom.xml -Dheadless.mode=true
+      run: |
+        BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
+        echo "Branch: $BRANCH_NAME"
+
+        # Check if this is a Copilot fix PR
+        if [[ "$BRANCH_NAME" == copilot/* ]]; then
+          echo "✅ Copilot PR detected — checking for failed tests to re-run..."
+          
+          # First, do a quick scan for rerun.txt in artifacts (if this is a rerun)
+          # Usually rerun.txt comes from previous run artifacts
+          if [ -f "target/rerun.txt" ]; then
+            FAILED_COUNT=$(wc -l < target/rerun.txt)
+            echo "📋 Found target/rerun.txt with $FAILED_COUNT failed scenario(s)"
+            
+            # Convert rerun.txt paths to comma-separated feature list
+            # Strip "file:" prefix and prepend "./" to ensure correct resolution
+            FAILED_FEATURES=$(sed 's|^file:||; s|^|./|' target/rerun.txt | paste -sd,)
+            echo "🔄 Running ONLY failed tests: $FAILED_FEATURES"
+            
+            mvn -B verify --file pom.xml -Dheadless.mode=true -Dcucumber.features="$FAILED_FEATURES"
+          else
+            echo "⚠️  No target/rerun.txt found — running full suite (first Copilot attempt)"
+            mvn -B verify --file pom.xml -Dheadless.mode=true
+          fi
+        else
+          echo "📝 Standard PR/push — running full test suite"
+          mvn -B verify --file pom.xml -Dheadless.mode=true
+        fi
