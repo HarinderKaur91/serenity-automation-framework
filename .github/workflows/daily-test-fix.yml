@@ -494,12 +494,6 @@ jobs:
             failures.push(...uniqueFailures);
 
             // ── 3. Render structured issue body ──────────────────────────────
-            if (failedLocations.length) {
-              body += `### Failed Feature Locations\n\n`;
-              for (const loc of failedLocations) body += `- \`${loc}\`\n`;
-              body += `\n`;
-            }
-
             if (failures.length) {
               body += `### Persistent Failures After Rerun — PASS 2 (${failures.length} scenario(s) still failing)\n\n`;
               
@@ -519,19 +513,35 @@ jobs:
                 featureMap.get(featureName).push(f);
               }
 
-              // Render grouped by feature file
+              // Render grouped by feature file (NO separate "Failed Feature Locations" section)
               for (const [featureName, featureFailures] of featureMap.entries()) {
                 body += `#### 📄 ${featureName}\n\n`;
                 for (const f of featureFailures.slice(0, 10)) {
-                  body += `**❌ ${f.scenario}**\n`;
+                  body += `**❌ ${f.scenario}** (Scenario)\n`;
+                  
+                  // Extract the specific failed Gherkin step from stack
+                  // Stack lines typically look like: "at ✽.Given I open... (file:src/...feature:7)"
+                  const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                  let failedStep = '';
+                  if (stepLines.length > 0) {
+                    const firstStep = stepLines[0].trim();
+                    // Extract step text between symbol and file path
+                    const stepMatch = firstStep.match(/[✽✓✗]\.(.+?)\s*\(file:/);
+                    if (stepMatch && stepMatch[1]) {
+                      failedStep = stepMatch[1].trim();
+                    }
+                  }
+                  if (failedStep) {
+                    body += `**Failed step:** \`${failedStep}\`\n\n`;
+                  }
+                  
                   body += `- **Class:** \`${f.classname}\`\n`;
                   body += `- **Error type:** \`${f.type}\`\n`;
                   body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
-                  // Extract failed step from stack: Cucumber stack lines often look like
-                  //   at ✽.<step text>(file:src/...feature:NN)
-                  const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                  
+                  // Show all failed steps in details
                   if (stepLines.length) {
-                    body += `**Failed step(s):**\n`;
+                    body += `**All Failed Gherkin Steps:**\n`;
                     for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
                     body += `\n`;
                   }
@@ -671,6 +681,43 @@ jobs:
                 .split('\n').map(s => s.replace(/^file:/, '').trim()).filter(Boolean);
             }
 
+            // ── Extract actual Gherkin steps from failures ──────────────────
+            // Parse failsafe XML to get failure details + stack with Gherkin steps
+            const xmlFiles = allFiles.filter(f => 
+              f.includes('failsafe-reports') && 
+              !f.includes('pass1-reports') && 
+              /TEST-.*\.xml$/.test(f)
+            );
+            const failures = [];
+            for (const xml of xmlFiles) {
+              const content = fs.readFileSync(xml, 'utf8');
+              const caseRegex = /<testcase\b[^>]*\bname="([^"]+)"[^>]*\bclassname="([^"]+)"[^>]*>([\s\S]*?)<\/testcase>/g;
+              let m;
+              while ((m = caseRegex.exec(content)) !== null) {
+                const [, name, classname, inner] = m;
+                const failMatch = inner.match(/<(failure|error)\b[^>]*\bmessage="([^"]*)"[^>]*\btype="([^"]*)"[^>]*>([\s\S]*?)<\/\1>/);
+                if (!failMatch) continue;
+                const [, , message, type, stackRaw] = failMatch;
+                const stack = stackRaw
+                  .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
+                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+                  .trim();
+                failures.push({ scenario: name, classname, message, type, stack });
+              }
+            }
+
+            // Dedupe by scenario+classname
+            const seen = new Set();
+            const uniqueFailures = [];
+            for (const f of failures) {
+              const key = `${f.classname}::${f.scenario}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              uniqueFailures.push(f);
+            }
+            failures.length = 0;
+            failures.push(...uniqueFailures);
+
             // ── Extract failure messages ─────────────────────────────────────
             let failureBlock = '';
             for (const file of reportFiles.slice(0, 5)) {
@@ -711,12 +758,27 @@ jobs:
                 : para('Could not extract individual scenario list (see GitHub Actions log).'),
 
               heading('Steps to Reproduce'),
-              bullets([
-                'Clone the repository at the master branch.',
-                `Run: mvn clean verify -Denv=${env}` + (site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : ''),
-                'Observe failure in target/site/serenity/serenity-summary.html',
-                'Inspect failsafe reports in target/failsafe-reports/ for stack traces',
-              ]),
+              // Extract Gherkin steps from first failure's stack
+              (failures.length > 0 && failures[0].stack)
+                ? (() => {
+                    const stepLines = failures[0].stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                    return stepLines.length > 0
+                      ? bullets(stepLines.slice(0, 10).map(s => {
+                          // Extract just the step text: "at ✽.Given I open... (file:...)" → "Given I open..."
+                          const match = s.match(/[✽✓✗]\.(.+?)\s*\(file:/);
+                          return match && match[1] ? match[1].trim() : s.trim();
+                        }))
+                      : bullets([
+                          `1. Clone repository at master branch`,
+                          `2. Run: mvn clean verify -Denv=${env}` + (site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : ''),
+                          `3. Review stack traces in failsafe reports`
+                        ]);
+                  })()
+                : bullets([
+                    `1. Clone repository at master branch`,
+                    `2. Run: mvn clean verify -Denv=${env}` + (site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : ''),
+                    `3. Review stack traces in failsafe reports`
+                  ]),
 
               heading('Failure Details'),
               failureBlock ? code(failureBlock.slice(0, 4000)) : para('See attached failsafe reports.'),

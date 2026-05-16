@@ -357,12 +357,27 @@ jobs:
                 : [para('Detailed failure data not available — see linked GitHub Actions run.')]),
 
               heading('Steps to Reproduce'),
-              bullets([
-                'Clone the repository at the master branch.',
-                'Run: mvn clean verify -Denv=qa -Dheadless.mode=true',
-                'Observe failure in target/site/serenity/serenity-summary.html',
-                'Inspect failsafe reports in target/failsafe-reports/ for stack traces',
-              ]),
+              // Extract Gherkin steps from first failure's stack
+              (failures.length > 0 && failures[0].stack)
+                ? (() => {
+                    const stepLines = failures[0].stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                    return stepLines.length > 0
+                      ? bullets(stepLines.slice(0, 10).map(s => {
+                          // Extract just the step text: "at ✽.Given I open... (file:...)" → "Given I open..."
+                          const match = s.match(/[✽✓✗]\.(.+?)\s*\(file:/);
+                          return match && match[1] ? match[1].trim() : s.trim();
+                        }))
+                      : bullets([
+                          '1. Clone repository at master branch',
+                          '2. Run: mvn clean verify -Denv=qa -Dheadless.mode=true',
+                          '3. Review stack traces in failsafe reports'
+                        ]);
+                  })()
+                : bullets([
+                    '1. Clone repository at master branch',
+                    '2. Run: mvn clean verify -Denv=qa -Dheadless.mode=true',
+                    '3. Review stack traces in failsafe reports'
+                  ]),
 
               heading('Investigation Hints'),
               bullets([
