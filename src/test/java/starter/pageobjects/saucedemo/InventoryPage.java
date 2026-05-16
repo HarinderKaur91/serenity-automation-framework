@@ -5,7 +5,7 @@ import org.openqa.selenium.By;
 
 public class InventoryPage extends PageObject {
     public static final By INVENTORY_CONTAINER = By.id("inventory_container");
-    public static final By PRODUCT_TITLES = By.cssSelector(".inventory_item_name");
+    public static final By PRODUCT_TITLES = By.cssSelector(".inventory_item_name_broken");
     public static final By CART_BADGE = By.cssSelector(".shopping_cart_badge");
     public static final By CART_LINK = By.cssSelector(".shopping_cart_link");
 
