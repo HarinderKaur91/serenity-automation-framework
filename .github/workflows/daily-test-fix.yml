@@ -228,26 +228,37 @@ jobs:
             echo "✅ Using current build: $REPORT_DIR"
           else
             echo "⚠️ No Serenity report directory with index.html found"
-            echo "report_index=" >> $GITHUB_OUTPUT
-            echo "report_summary=" >> $GITHUB_OUTPUT
+            echo "report_zip=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Copy fresh index.html to workspace
-          cp "$REPORT_DIR/index.html" "serenity-index-${{ matrix.env }}.html"
-          echo "report_index=serenity-index-${{ matrix.env }}.html" >> $GITHUB_OUTPUT
-          echo "✅ Copied fresh index.html → serenity-index-${{ matrix.env }}.html"
+          # Count test files to verify report has content
+          FILE_COUNT=$(find "$REPORT_DIR" -type f | wc -l)
+          echo "📊 Report contains $FILE_COUNT files"
           
-          # Also copy as summary report for convenience
-          cp "$REPORT_DIR/index.html" "serenity-summary-${{ matrix.env }}.html"
-          echo "report_summary=serenity-summary-${{ matrix.env }}.html" >> $GITHUB_OUTPUT
-          echo "✅ Copied summary → serenity-summary-${{ matrix.env }}.html"
+          if [ "$FILE_COUNT" -lt 10 ]; then
+            echo "⚠️ Report directory seems sparse ($FILE_COUNT files) — may not have test data"
+          fi
+
+          # Build a ZIP of the ENTIRE Serenity report directory
+          # Includes index.html + all CSS/JS/data/screenshots/reports
+          # This ensures everything loads properly when extracted
+          ZIP_PATH="serenity-full-report-${{ matrix.env }}.zip"
+          echo "Creating ZIP: $ZIP_PATH from $REPORT_DIR"
           
-          # Verify files exist and show sizes
-          ls -lh serenity-index-${{ matrix.env }}.html serenity-summary-${{ matrix.env }}.html
+          if [ "$FILE_COUNT" -gt 0 ]; then
+            (cd "$(dirname $REPORT_DIR)" && zip -qr "$OLDPWD/$ZIP_PATH" "$(basename $REPORT_DIR)")
+            ZIP_SIZE=$(du -h "$ZIP_PATH" | cut -f1)
+            echo "report_zip=$ZIP_PATH" >> $GITHUB_OUTPUT
+            echo "✅ Zipped full report → $ZIP_PATH ($ZIP_SIZE with $FILE_COUNT files)"
+            ls -lh "$ZIP_PATH"
+          else
+            echo "⚠️ Report directory is empty, skipping ZIP"
+            echo "report_zip=" >> $GITHUB_OUTPUT
+          fi
 
       - name: Email Test Reports
-        if: always() && steps.report.outputs.report_index != ''
+        if: always() && steps.report.outputs.report_zip != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -270,25 +281,23 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            📁 Reports Attached
-            ───────────────────
-            Two HTML reports are attached (both show the same full report):
+            📁 Full Serenity Report (ZIP Attached)
+            ───────────────────────────────────────
+            Extract the ZIP file and open index.html in your browser to view the complete report:
 
-            1. serenity-index-${{ matrix.env }}.html — Open directly in browser
-            2. serenity-summary-${{ matrix.env }}.html — Same report, alternative name
+              • All test scenarios with pass/fail details and statistics
+              • Individual Gherkin steps with their execution results
+              • Failure screenshots and detailed error logs
+              • Full test execution timeline and summary
+              • Click through each scenario for detailed step logs
 
-            Each file contains:
-              • All test scenarios with pass/fail details
-              • Individual Gherkin steps and their results
-              • Failure screenshots and logs
-              • Full test execution summary with statistics
-              • Click through scenarios for detailed step logs
+            The ZIP contains the complete report directory with all CSS, JavaScript, data files, and screenshots embedded.
 
             — Self-Healing Test Framework
-          attachments: ${{ steps.report.outputs.report_index }},${{ steps.report.outputs.report_summary }}
+          attachments: ${{ steps.report.outputs.report_zip }}
 
       - name: Email Failed - No Report
-        if: always() && steps.report.outputs.report_index == ''
+        if: always() && steps.report.outputs.report_zip == ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
