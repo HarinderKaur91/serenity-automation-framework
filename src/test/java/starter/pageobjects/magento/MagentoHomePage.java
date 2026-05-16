@@ -29,7 +29,7 @@ public class MagentoHomePage extends PageObject {
         List<WebElement> productLinks = new WebDriverWait(getDriver(), Duration.ofSeconds(15))
                 .until(driver -> {
                     List<WebElement> elements = driver.findElements(PRODUCT_RESULTS);
-                    return (elements == null || elements.isEmpty()) ? null : elements;
+                    return elements.isEmpty() ? null : elements;
                 });
         return productLinks.stream()
                 .map(WebElement::getText)
@@ -42,7 +42,7 @@ public class MagentoHomePage extends PageObject {
         List<WebElement> productLinks = new WebDriverWait(getDriver(), Duration.ofSeconds(15))
                 .until(driver -> {
                     List<WebElement> elements = driver.findElements(PRODUCT_RESULTS);
-                    return (elements == null || elements.isEmpty()) ? null : elements;
+                    return elements.isEmpty() ? null : elements;
                 });
         productLinks.get(0).click();
     }
