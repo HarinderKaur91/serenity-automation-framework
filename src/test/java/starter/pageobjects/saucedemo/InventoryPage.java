@@ -5,7 +5,7 @@ import org.openqa.selenium.By;
 
 public class InventoryPage extends PageObject {
     public static final By INVENTORY_CONTAINER = By.id("inventory_container");
-    public static final By PRODUCT_TITLES = By.cssSelector(".inventory_item_name_broken");
+    public static final By PRODUCT_TITLES = By.cssSelector(".inventory_item_name");
     public static final By CART_BADGE = By.cssSelector(".shopping_cart_badge");
     public static final By CART_LINK = By.cssSelector(".shopping_cart_link");
 
@@ -14,7 +14,15 @@ public class InventoryPage extends PageObject {
     }
 
     public java.util.List<String> getProductTitles() {
-        return findAll(PRODUCT_TITLES).stream().map(e -> e.getText()).toList();
+        java.util.List<net.serenitybdd.core.pages.WebElementFacade> productTitles = findAll(PRODUCT_TITLES);
+        if (productTitles == null) {
+            return java.util.List.of();
+        }
+        return productTitles.stream()
+                .map(e -> e.getDomProperty("textContent"))
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .toList();
     }
 
     public void addProductToCart(String productName) {
@@ -24,7 +32,7 @@ public class InventoryPage extends PageObject {
 
     public String cartBadgeCount() {
         if (!$(CART_BADGE).isCurrentlyVisible()) return "0";
-        return $(CART_BADGE).getText();
+        return $(CART_BADGE).getDomProperty("textContent").trim();
     }
 
     public void openCart() {
