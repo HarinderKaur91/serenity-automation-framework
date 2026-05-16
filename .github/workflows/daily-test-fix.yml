@@ -208,54 +208,46 @@ jobs:
             target/rerun.txt
           if-no-files-found: warn
 
-      - name: Locate Serenity Report
+      - name: Locate & Package Serenity Report
         if: always()
         id: report
         run: |
           echo "── Contents of pass1-reports/serenity/ ──"
-          ls -la pass1-reports/serenity/ 2>/dev/null || echo "PASS 1 snapshot missing"
+          ls -la pass1-reports/serenity/ 2>/dev/null | head -20 || echo "PASS 1 snapshot missing"
           echo "── Contents of target/site/serenity/ ──"
-          ls -la target/site/serenity/ 2>/dev/null || echo "target/site/serenity/ missing"
+          ls -la target/site/serenity/ 2>/dev/null | head -20 || echo "target/site/serenity/ missing"
 
           # Prefer the PASS 1 snapshot so the email always reflects the original
           # (full) test run, not the rerun subset from PASS 2.
-          if [ -f "pass1-reports/serenity/serenity-summary.html" ]; then
-            echo "report_path=pass1-reports/serenity/serenity-summary.html" >> $GITHUB_OUTPUT
-            echo "✅ Using PASS 1 snapshot: pass1-reports/serenity/serenity-summary.html"
-          elif [ -f "pass1-reports/serenity/index.html" ]; then
-            echo "report_path=pass1-reports/serenity/index.html" >> $GITHUB_OUTPUT
-            echo "✅ Using PASS 1 snapshot: pass1-reports/serenity/index.html"
-          elif [ -f "target/site/serenity/serenity-summary.html" ]; then
-            echo "report_path=target/site/serenity/serenity-summary.html" >> $GITHUB_OUTPUT
-            echo "⚠️ PASS 1 snapshot missing, falling back to current target/site/serenity/serenity-summary.html"
-          elif [ -f "target/site/serenity/index.html" ]; then
-            echo "report_path=target/site/serenity/index.html" >> $GITHUB_OUTPUT
-            echo "⚠️ PASS 1 snapshot missing, falling back to current target/site/serenity/index.html"
-          else
-            echo "report_path=" >> $GITHUB_OUTPUT
-            echo "⚠️ No Serenity report found"
-          fi
-
-          # Build a zip of the full multi-file Serenity report so the recipient
-          # can unzip and open index.html with all styling/screenshots intact.
           REPORT_DIR=""
-          if [ -d "pass1-reports/serenity" ]; then
+          if [ -d "pass1-reports/serenity" ] && [ -f "pass1-reports/serenity/index.html" ]; then
             REPORT_DIR="pass1-reports/serenity"
-          elif [ -d "target/site/serenity" ]; then
+            echo "✅ Using PASS 1 snapshot: $REPORT_DIR"
+          elif [ -d "target/site/serenity" ] && [ -f "target/site/serenity/index.html" ]; then
             REPORT_DIR="target/site/serenity"
+            echo "✅ Using current build: $REPORT_DIR"
+          else
+            echo "⚠️ No Serenity report directory with index.html found"
+            echo "report_index=" >> $GITHUB_OUTPUT
+            echo "report_summary=" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-          if [ -n "$REPORT_DIR" ]; then
-            ZIP_PATH="serenity-full-report-${{ matrix.env }}.zip"
-            (cd "$REPORT_DIR/.." && zip -qr "$OLDPWD/$ZIP_PATH" "$(basename $REPORT_DIR)")
-            echo "report_zip=$ZIP_PATH" >> $GITHUB_OUTPUT
-            echo "📦 Zipped full report → $ZIP_PATH ($(du -h $ZIP_PATH | cut -f1))"
-          else
-            echo "report_zip=" >> $GITHUB_OUTPUT
-          fi
+          # Copy fresh index.html to workspace
+          cp "$REPORT_DIR/index.html" "serenity-index-${{ matrix.env }}.html"
+          echo "report_index=serenity-index-${{ matrix.env }}.html" >> $GITHUB_OUTPUT
+          echo "✅ Copied fresh index.html → serenity-index-${{ matrix.env }}.html"
+          
+          # Also copy as summary report for convenience
+          cp "$REPORT_DIR/index.html" "serenity-summary-${{ matrix.env }}.html"
+          echo "report_summary=serenity-summary-${{ matrix.env }}.html" >> $GITHUB_OUTPUT
+          echo "✅ Copied summary → serenity-summary-${{ matrix.env }}.html"
+          
+          # Verify files exist and show sizes
+          ls -lh serenity-index-${{ matrix.env }}.html serenity-summary-${{ matrix.env }}.html
 
       - name: Email Test Reports
-        if: always()
+        if: always() && steps.report.outputs.report_index != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -271,17 +263,60 @@ jobs:
 
             The daily test run has completed.
 
+            📊 Test Summary
+            ───────────────
             Environment: ${{ matrix.env }}
             Status: ${{ steps.run.outcome }}
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            Two reports are attached:
-              1. serenity-summary.html  — self-contained single-page summary, open directly in a browser.
-              2. serenity-full-report-${{ matrix.env }}.zip — unzip and open index.html for the full multi-page report (scenarios, steps, screenshots).
+            📁 Reports Attached
+            ───────────────────
+            Two HTML reports are attached (both show the same full report):
+
+            1. serenity-index-${{ matrix.env }}.html — Open directly in browser
+            2. serenity-summary-${{ matrix.env }}.html — Same report, alternative name
+
+            Each file contains:
+              • All test scenarios with pass/fail details
+              • Individual Gherkin steps and their results
+              • Failure screenshots and logs
+              • Full test execution summary with statistics
+              • Click through scenarios for detailed step logs
 
             — Self-Healing Test Framework
-          attachments: ${{ steps.report.outputs.report_path }},${{ steps.report.outputs.report_zip }}
+          attachments: ${{ steps.report.outputs.report_index }},${{ steps.report.outputs.report_summary }}
+
+      - name: Email Failed - No Report
+        if: always() && steps.report.outputs.report_index == ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "Test Report [${{ matrix.env }}] — ⚠️ NO REPORT GENERATED — ${{ github.repository }}"
+          to: harinder.qa.88@gmail.com
+          from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
+          body: |
+            Hi,
+
+            ⚠️ Test run completed but NO Serenity report was generated.
+
+            Environment: ${{ matrix.env }}
+            Status: ${{ steps.run.outcome }}
+            Repository: ${{ github.repository }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            This could indicate:
+              • Maven build failed before generating reports
+              • No tests were executed
+              • Report directory is missing
+
+            Check the GitHub Actions log for details.
+
+            — Self-Healing Test Framework
 
   report-success:
     needs: run-tests
@@ -497,23 +532,50 @@ jobs:
             if (failures.length) {
               body += `### Persistent Failures After Rerun — PASS 2 (${failures.length} scenario(s) still failing)\n\n`;
               
-              // Extract unique feature files from failedLocations
+              // Extract feature files from failedLocations
               // e.g., "src/test/resources/features/saucedemo/login.feature:7" → "login.feature"
-              const featureMap = new Map(); // feature file → [failures]
+              const featureMap = new Map(); // feature file name → [failures]
+              const featureFiles = new Set();
+              
+              for (const loc of failedLocations) {
+                const featureName = loc.split('/').pop().split(':')[0]; // "login.feature:7" → "login.feature"
+                featureFiles.add(featureName);
+              }
+              console.log(`Feature files from rerun.txt: ${Array.from(featureFiles).join(', ')}`);
+              
+              // Assign each failure to a feature file
               for (const f of failures) {
-                // Try to find matching feature file from failedLocations
-                const matchingLoc = failedLocations.find(loc => f.classname.includes(f.scenario));
-                const featureName = matchingLoc
-                  ? matchingLoc.split('/').pop().split(':')[0]  // "login.feature:7" → "login.feature"
-                  : 'Unknown Feature';
+                // Try to find matching feature file from stack trace or failedLocations
+                let featureName = null;
+                
+                // First try: look for feature file path in the stack trace
+                const stackLines = f.stack.split('\n');
+                for (const line of stackLines) {
+                  const featureMatch = line.match(/(\w+\.feature):(\d+)/);
+                  if (featureMatch) {
+                    featureName = featureMatch[1]; // e.g., "login.feature"
+                    break;
+                  }
+                }
+                
+                // Second try: match via failedLocations
+                if (!featureName && failedLocations.length > 0) {
+                  featureName = failedLocations[0].split('/').pop().split(':')[0];
+                }
+                
+                // Fallback
+                if (!featureName) {
+                  featureName = 'Scenarios';
+                }
                 
                 if (!featureMap.has(featureName)) {
                   featureMap.set(featureName, []);
                 }
                 featureMap.get(featureName).push(f);
+                console.log(`Mapped failure "${f.scenario}" to feature file "${featureName}"`);
               }
 
-              // Render grouped by feature file (NO separate "Failed Feature Locations" section)
+              // Render grouped by feature file
               for (const [featureName, featureFailures] of featureMap.entries()) {
                 body += `#### 📄 ${featureName}\n\n`;
                 for (const f of featureFailures.slice(0, 10)) {
