@@ -15,6 +15,8 @@ public class DynamicLoadingPage extends PageObject {
     }
 
     public String waitForLoadedText() {
-        return $(LOADED_TEXT).waitUntilVisible().getText();
+        $(LOADED_TEXT).waitUntilVisible();
+        String text = $(LOADED_TEXT).getAttribute("textContent");
+        return text != null ? text.trim() : "";
     }
 }

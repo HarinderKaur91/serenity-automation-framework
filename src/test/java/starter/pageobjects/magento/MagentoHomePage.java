@@ -12,12 +12,15 @@ public class MagentoHomePage extends PageObject {
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
 
     public void searchFor(String term) {
-        $(SEARCH_FIELD).type(term).then().sendKeys(org.openqa.selenium.Keys.ENTER);
+        $(SEARCH_FIELD).waitUntilEnabled().type(term);
+        $(SEARCH_FIELD).sendKeys(org.openqa.selenium.Keys.ENTER);
     }
 
     public java.util.List<String> getProductResults() {
         $(PRODUCT_RESULTS).waitUntilVisible();
-        return findAll(PRODUCT_RESULTS).stream().map(e -> e.getText()).toList();
+        return findAll(PRODUCT_RESULTS).stream()
+                .map(e -> e.getText())
+                .collect(java.util.stream.Collectors.toList());
     }
 
     public void openFirstProduct() {
@@ -26,6 +29,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     public String getPageTitleText() {
+        $(PRODUCT_RESULTS).waitUntilVisible();
         return getDriver().getTitle();
     }
 }

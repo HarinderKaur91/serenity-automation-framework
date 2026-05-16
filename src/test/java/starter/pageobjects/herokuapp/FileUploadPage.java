@@ -20,6 +20,8 @@ public class FileUploadPage extends PageObject {
     }
 
     public String uploadedFileName() {
-        return $(UPLOADED_FILES).waitUntilVisible().getText();
+        $(UPLOADED_FILES).waitUntilVisible();
+        String text = $(UPLOADED_FILES).getAttribute("textContent");
+        return text != null ? text.trim() : "";
     }
 }
