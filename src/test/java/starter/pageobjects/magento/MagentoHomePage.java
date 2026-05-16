@@ -26,11 +26,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     public List<String> getProductResults() {
-        List<WebElement> productLinks = new WebDriverWait(getDriver(), Duration.ofSeconds(15))
-                .until(driver -> {
-                    List<WebElement> elements = driver.findElements(PRODUCT_RESULTS);
-                    return elements.isEmpty() ? null : elements;
-                });
+        List<WebElement> productLinks = waitForProductLinks();
         return productLinks.stream()
                 .map(WebElement::getText)
                 .map(String::trim)
@@ -39,11 +35,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     public void openFirstProduct() {
-        List<WebElement> productLinks = new WebDriverWait(getDriver(), Duration.ofSeconds(15))
-                .until(driver -> {
-                    List<WebElement> elements = driver.findElements(PRODUCT_RESULTS);
-                    return elements.isEmpty() ? null : elements;
-                });
+        List<WebElement> productLinks = waitForProductLinks();
         productLinks.get(0).click();
     }
 
@@ -56,5 +48,13 @@ public class MagentoHomePage extends PageObject {
             }
         }
         return getDriver().getTitle().trim();
+    }
+
+    private List<WebElement> waitForProductLinks() {
+        return new WebDriverWait(getDriver(), Duration.ofSeconds(15))
+                .until(driver -> {
+                    List<WebElement> elements = driver.findElements(PRODUCT_RESULTS);
+                    return elements.isEmpty() ? null : elements;
+                });
     }
 }
