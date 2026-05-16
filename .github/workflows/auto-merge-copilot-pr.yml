@@ -376,6 +376,18 @@ jobs:
 
             const summary = `[Auto-Escalation] Copilot fix rejected - GitHub #${issueNumber} (PR #${prNumber})`;
 
+            // ── Auto-detect issue type (JIRA project names vary) ──────────────
+            const itResp = await fetch(`${jiraBase}/rest/api/3/project/${projectKey}`, {
+              headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
+            });
+            const itData = await itResp.json();
+            const availableTypes = (itData.issueTypes || []).map(t => t.name);
+            console.log(`Available issue types: ${availableTypes.join(', ')}`);
+            const preferred = ['Bug', 'Defect', 'Task', 'Story', 'Improvement'];
+            const issueTypeName = preferred.find(p => availableTypes.some(a => a.toLowerCase() === p.toLowerCase()))
+              || availableTypes[0] || 'Task';
+            console.log(`Using issue type: ${issueTypeName}`);
+
             const resp = await fetch(`${jiraBase}/rest/api/3/issue`, {
               method: 'POST',
               headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
@@ -384,7 +396,7 @@ jobs:
                   project: { key: projectKey },
                   summary,
                   description: { type: "doc", version: 1, content: adfContent },
-                  issuetype: { name: "Bug" },
+                  issuetype: { name: issueTypeName },
                   labels: ["auto-test-failure", "self-healing-framework", "copilot-fix-rejected"],
                   priority: { name: "Highest" }
                 }

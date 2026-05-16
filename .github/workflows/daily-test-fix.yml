@@ -436,7 +436,16 @@ jobs:
               : [];
 
             // ── 2. Parse failsafe XML for scenario name + failure message ────
-            const xmlFiles = allFiles.filter(f => /TEST-.*\.xml$/.test(f));
+            // Use PASS 2 results (artifacts/failsafe-reports/) which contain only
+            // the scenarios that STILL FAIL after the rerun. These are the persistent
+            // failures that need to be fixed.
+            const xmlFiles = allFiles.filter(f => 
+              f.includes('failsafe-reports') && 
+              !f.includes('pass1-reports') && 
+              /TEST-.*\.xml$/.test(f)
+            );
+            console.log(`Found ${xmlFiles.length} PASS 2 failsafe XML files for parsing.`);
+            
             const failures = []; // { scenario, classname, message, type, stack, location }
 
             for (const xml of xmlFiles) {
@@ -686,6 +695,18 @@ jobs:
               });
               console.log(`Updated existing JIRA issue ${jiraKey} with retry-exhausted notice.`);
             } else {
+              // ── Auto-detect issue type (JIRA project names vary) ───────────
+              const itResp = await fetch(`${jiraBase}/rest/api/3/project/${projectKey}`, {
+                headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
+              });
+              const itData = await itResp.json();
+              const availableTypes = (itData.issueTypes || []).map(t => t.name);
+              console.log(`Available issue types: ${availableTypes.join(', ')}`);
+              const preferred = ['Bug', 'Defect', 'Task', 'Story', 'Improvement'];
+              const issueTypeName = preferred.find(p => availableTypes.some(a => a.toLowerCase() === p.toLowerCase()))
+                || availableTypes[0] || 'Task';
+              console.log(`Using issue type: ${issueTypeName}`);
+
               const createResp = await fetch(`${jiraBase}/rest/api/3/issue`, {
                 method: 'POST',
                 headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
@@ -694,7 +715,7 @@ jobs:
                     project: { key: projectKey },
                     summary: `Auto Test Failure - GitHub #${issueNumber} [${site}/${env}] - Retries Exhausted`,
                     description: { type: "doc", version: 1, content: adfContent },
-                    issuetype: { name: "Bug" },
+                    issuetype: { name: issueTypeName },
                     labels: ["auto-test-failure", "self-healing-framework", "retries-exhausted"],
                     priority: { name: "Highest" }
                   }
