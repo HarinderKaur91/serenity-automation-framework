@@ -257,6 +257,35 @@ jobs:
             echo "report_zip=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Create GitHub Release with Report
+        id: release
+        if: always() && steps.report.outputs.report_zip != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ZIP_FILE="${{ steps.report.outputs.report_zip }}"
+          RELEASE_TAG="test-report-${{ matrix.env }}-$(date +%Y%m%d-%H%M%S)"
+          
+          echo "📦 Creating GitHub Release: $RELEASE_TAG"
+          echo "📎 Uploading: $ZIP_FILE"
+          
+          # Create release with the ZIP as an asset
+          RELEASE_URL=$(gh release create "$RELEASE_TAG" \
+            --repo="${{ github.repository }}" \
+            --title="Test Report [${{ matrix.env }}] - ${{ github.run_id }}" \
+            --notes="📊 Full Serenity test report for ${{ matrix.env }} environment. Run: ${{ github.run_id }}" \
+            "$ZIP_FILE" 2>&1 | grep -oP 'https://github\.com/[^\s]+/releases/tag/[^\s]+' || echo "")
+          
+          if [ -z "$RELEASE_URL" ]; then
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+          fi
+          
+          DOWNLOAD_URL="$RELEASE_URL/download/$(basename $ZIP_FILE)"
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "✅ Release created: $RELEASE_URL"
+          echo "📥 Download link: $DOWNLOAD_URL"
+
       - name: Email Test Reports
         if: always() && steps.report.outputs.report_zip != ''
         uses: dawidd6/action-send-mail@v3
@@ -281,20 +310,28 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            📁 Full Serenity Report (ZIP Attached)
-            ───────────────────────────────────────
-            Extract the ZIP file and open index.html in your browser to view the complete report:
+            📁 Full Serenity Report (Available for Download)
+            ─────────────────────────────────────────────────
+            ✅ Your test report has been uploaded to GitHub Releases (no virus warnings!)
 
+            📥 Download the full report here:
+            ${{ steps.release.outputs.download_url }}
+
+            📋 What's included in the report:
               • All test scenarios with pass/fail details and statistics
               • Individual Gherkin steps with their execution results
               • Failure screenshots and detailed error logs
               • Full test execution timeline and summary
               • Click through each scenario for detailed step logs
 
-            The ZIP contains the complete report directory with all CSS, JavaScript, data files, and screenshots embedded.
+            🔧 How to use:
+              1. Click the download link above
+              2. Extract the ZIP file
+              3. Open index.html in your browser
+              4. View the complete interactive test report
 
             — Self-Healing Test Framework
-          attachments: ${{ steps.report.outputs.report_zip }}
+          attachments: ""
 
       - name: Email Failed - No Report
         if: always() && steps.report.outputs.report_zip == ''
