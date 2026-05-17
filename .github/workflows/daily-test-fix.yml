@@ -598,6 +598,9 @@ jobs:
 
             let body = `## Automated Test Failure\n\n`;
             body += `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n`;
+            body += `**Environment:** ${{ github.event.inputs.env || 'qa' }}\n`;
+            body += `**Site filter:** ${{ github.event.inputs.site || 'all' }}\n\n`;
+            body += `<!-- PASS1_CONFIG env=${{ github.event.inputs.env || 'qa' }} site=${{ github.event.inputs.site || 'all' }} -->\n\n`;
             body += `> ⚠️ **These are PASS 2 (post-rerun) failures only** — scenarios that failed in the initial run AND still failed after the automatic selective rerun. Flaky scenarios that passed on rerun are excluded.\n\n`;
             body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
 
@@ -1131,41 +1134,3 @@ jobs:
               }
             }
 
-  post-merge-verification:
-    name: 📋 Post-Merge Final Verification — Copilot Fix
-    if: >-
-      github.event_name == 'pull_request'
-      && github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.head.ref, 'copilot/')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch Verification Rerun (rerun_count=2)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          echo "========================================================"
-          echo "✅ Copilot PR #$PR_NUMBER has been merged to master"
-          echo "========================================================"
-          echo ""
-          echo "🔄 Triggering final verification rerun..."
-          echo "   This will run the same failed tests again (rerun_count=2)"
-          echo "   If they pass: Issue closes ✅"
-          echo "   If they fail: Escalated to JIRA as 'Retries Exhausted' 🐛"
-          echo ""
-          
-          # Use GitHub API to dispatch workflow (more reliable than gh cli)
-          curl -X POST \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily-test-fix.yml/dispatches \
-            -d '{
-              "ref":"master",
-              "inputs":{
-                "rerun_count":"2",
-                "env":"qa",
-                "site":"all"
-              }
-            }' \
-            && echo "✅ Verification rerun dispatched successfully" \
-            || echo "⚠️ Failed to dispatch verification rerun"
