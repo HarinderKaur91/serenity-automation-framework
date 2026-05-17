@@ -2,22 +2,30 @@ package starter.pageobjects.magento;
 
 import net.serenitybdd.annotations.DefaultUrl;
 import net.serenitybdd.core.pages.PageObject;
+import net.serenitybdd.core.pages.WebElementFacade;
 import org.openqa.selenium.By;
 
 @DefaultUrl("https://magento.softwaretestingboard.com/")
 public class MagentoHomePage extends PageObject {
 
-    public static final By SEARCH_FIELD = By.id("search");
+    public static final By SEARCH_FIELD = By.cssSelector("input#search, input[name='q']");
     public static final By PRODUCT_RESULTS = By.cssSelector(".product-item-name a");
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
 
     public void searchFor(String term) {
-        $(SEARCH_FIELD).type(term).then().sendKeys(org.openqa.selenium.Keys.ENTER);
+        $(SEARCH_FIELD).waitUntilEnabled().clear();
+        $(SEARCH_FIELD).typeAndEnter(term);
     }
 
     public java.util.List<String> getProductResults() {
         $(PRODUCT_RESULTS).waitUntilVisible();
-        return findAll(PRODUCT_RESULTS).stream().map(e -> e.getText()).toList();
+        java.util.List<WebElementFacade> results = findAll(PRODUCT_RESULTS);
+        if (results == null) {
+            return java.util.List.of();
+        }
+        return results.stream()
+                .map(WebElementFacade::getText)
+                .toList();
     }
 
     public void openFirstProduct() {
@@ -26,6 +34,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     public String getPageTitleText() {
-        return getDriver().getTitle();
+        String title = getDriver().getTitle();
+        return title == null ? "" : title;
     }
 }
