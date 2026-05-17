@@ -144,7 +144,6 @@
                 <version>${serenity.version}</version>
                 <configuration>
                     <tags>${tags}</tags>
-                    <reports>single-page-html</reports>
                 </configuration>
                 <executions>
                     <execution>

@@ -97,13 +97,51 @@ jobs:
             # Diagnostic: list what's in target/ so we can confirm reports were generated
             echo "── Diagnostic: target/ contents ──"
             ls -la target/ 2>/dev/null || echo "target/ missing"
+            echo ""
             echo "── Diagnostic: failsafe-reports/ contents ──"
-            ls -la target/failsafe-reports/ 2>/dev/null || echo "target/failsafe-reports/ missing"
-            echo "── Diagnostic: surefire-reports/ contents ──"
-            ls -la target/surefire-reports/ 2>/dev/null || echo "target/surefire-reports/ missing"
+            if [ -d "target/failsafe-reports" ]; then
+              ls -la target/failsafe-reports/
+              echo "Test XML files:"
+              find target/failsafe-reports -name "*.xml" -exec wc -l {} \;
+            else
+              echo "target/failsafe-reports/ missing — ⚠️ NO TESTS RAN!"
+            fi
+            echo ""
+            echo "── Diagnostic: serenity/ structure BEFORE copying ──"
+            if [ -d "target/site/serenity" ]; then
+              echo "✅ target/site/serenity exists"
+              echo "Top-level contents:"
+              ls -lah target/site/serenity/ | head -20
+              echo ""
+              echo "Directories:"
+              find target/site/serenity -maxdepth 1 -type d
+              echo ""
+              echo "All files (with counts):"
+              find target/site/serenity -type f | wc -l
+              echo "  - CSS files:"
+              find target/site/serenity -name "*.css" 2>/dev/null | wc -l
+              echo "  - JS files:"
+              find target/site/serenity -name "*.js" 2>/dev/null | wc -l
+              echo "  - JSON files:"
+              find target/site/serenity -name "*.json" 2>/dev/null | wc -l
+              echo "  - HTML files:"
+              find target/site/serenity -name "*.html" 2>/dev/null | wc -l
+              echo ""
+              echo "Critical files:"
+              [ -f "target/site/serenity/index.html" ] && echo "  ✅ index.html" || echo "  ❌ index.html MISSING"
+              [ -d "target/site/serenity/css" ] && echo "  ✅ css/" || echo "  ❌ css/ MISSING"
+              [ -d "target/site/serenity/js" ] && echo "  ✅ js/" || echo "  ❌ js/ MISSING ⚠️"
+              [ -f "target/site/serenity/data.json" ] && echo "  ✅ data.json" || echo "  ❌ data.json MISSING ⚠️"
+            else
+              echo "❌ target/site/serenity DOES NOT EXIST — ⚠️ SERENITY REPORT NOT GENERATED!"
+              echo "This likely means Maven tests failed to run or Serenity plugin issue"
+            fi
 
             FAILED_COUNT=$(python3 "$PARSER" count 2>/dev/null || echo 0)
-            echo "── Diagnostic: PASS1_EXIT=$PASS1_EXIT FAILED_COUNT=$FAILED_COUNT ──"
+            echo ""
+            echo "── Diagnostic Summary ──"
+            echo "Maven exit code: $PASS1_EXIT (0 = success, non-zero = failure)"
+            echo "Failed test count: $FAILED_COUNT"
 
             # ── Snapshot PASS 1 reports BEFORE any PASS 2 `mvn clean` wipes them.
             # The email is sent from this snapshot so the user always sees the
@@ -212,48 +250,103 @@ jobs:
         if: always()
         id: report
         run: |
-          echo "── Contents of pass1-reports/serenity/ ──"
-          ls -la pass1-reports/serenity/ 2>/dev/null | head -20 || echo "PASS 1 snapshot missing"
-          echo "── Contents of target/site/serenity/ ──"
-          ls -la target/site/serenity/ 2>/dev/null | head -20 || echo "target/site/serenity/ missing"
+          echo "========================================================"
+          echo "📊 Serenity Report Diagnostics"
+          echo "========================================================"
+          
+          echo ""
+          echo "── PASS 1 Report (pass1-reports/serenity) ──"
+          if [ -d "pass1-reports/serenity" ]; then
+            echo "✅ Directory exists"
+            PASS1_FILES=$(find pass1-reports/serenity -type f | wc -l)
+            echo "   Files: $PASS1_FILES"
+            ls -lah pass1-reports/serenity/ | head -15
+            echo "   Key files:"
+            [ -f "pass1-reports/serenity/index.html" ] && echo "   ✅ index.html" || echo "   ❌ index.html MISSING"
+            [ -d "pass1-reports/serenity/css" ] && echo "   ✅ css/" || echo "   ❌ css/ MISSING"
+            [ -d "pass1-reports/serenity/js" ] && echo "   ✅ js/" || echo "   ❌ js/ MISSING"
+            [ -f "pass1-reports/serenity/data.json" ] && echo "   ✅ data.json (TEST DATA)" || echo "   ❌ data.json MISSING (⚠️  CRITICAL!)"
+            [ -f "pass1-reports/serenity/data.js" ] && echo "   ✅ data.js (TEST DATA)" || echo "   ❌ data.js MISSING"
+            [ -d "pass1-reports/serenity/screenshots" ] && echo "   ✅ screenshots/" || echo "   ⚠️  screenshots/ missing"
+            [ -d "pass1-reports/serenity/json" ] && echo "   ✅ json/" || echo "   ⚠️  json/ missing"
+            echo "   All JSON/JS files:"
+            find pass1-reports/serenity -name "*.json" -o -name "*.js" 2>/dev/null | head -20
+          else
+            echo "❌ Directory missing"
+          fi
+          
+          echo ""
+          echo "── Current Report (target/site/serenity) ──"
+          if [ -d "target/site/serenity" ]; then
+            echo "✅ Directory exists"
+            CURRENT_FILES=$(find target/site/serenity -type f | wc -l)
+            echo "   Files: $CURRENT_FILES"
+            ls -lah target/site/serenity/ | head -15
+            echo "   Key files:"
+            [ -f "target/site/serenity/index.html" ] && echo "   ✅ index.html" || echo "   ❌ index.html MISSING"
+            [ -d "target/site/serenity/css" ] && echo "   ✅ css/" || echo "   ❌ css/ MISSING"
+            [ -d "target/site/serenity/js" ] && echo "   ✅ js/" || echo "   ❌ js/ MISSING"
+            [ -f "target/site/serenity/data.json" ] && echo "   ✅ data.json (TEST DATA)" || echo "   ❌ data.json MISSING (⚠️  CRITICAL!)"
+            [ -f "target/site/serenity/data.js" ] && echo "   ✅ data.js (TEST DATA)" || echo "   ❌ data.js MISSING"
+            [ -d "target/site/serenity/screenshots" ] && echo "   ✅ screenshots/" || echo "   ⚠️  screenshots/ missing"
+            [ -d "target/site/serenity/json" ] && echo "   ✅ json/" || echo "   ⚠️  json/ missing"
+            echo "   All JSON/JS files:"
+            find target/site/serenity -name "*.json" -o -name "*.js" 2>/dev/null | head -20
+          else
+            echo "❌ Directory missing"
+          fi
 
           # Prefer the PASS 1 snapshot so the email always reflects the original
           # (full) test run, not the rerun subset from PASS 2.
           REPORT_DIR=""
           if [ -d "pass1-reports/serenity" ] && [ -f "pass1-reports/serenity/index.html" ]; then
             REPORT_DIR="pass1-reports/serenity"
-            echo "✅ Using PASS 1 snapshot: $REPORT_DIR"
+            echo ""
+            echo "✅ Selected: PASS 1 snapshot"
           elif [ -d "target/site/serenity" ] && [ -f "target/site/serenity/index.html" ]; then
             REPORT_DIR="target/site/serenity"
-            echo "✅ Using current build: $REPORT_DIR"
+            echo ""
+            echo "⚠️  Selected: Current build (PASS 1 not available)"
           else
-            echo "⚠️ No Serenity report directory with index.html found"
+            echo ""
+            echo "❌ FATAL: No Serenity report directory with index.html found"
+            echo "   - Check that tests actually ran"
+            echo "   - Check Maven output for Serenity report generation"
             echo "report_zip=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           # Count test files to verify report has content
-          FILE_COUNT=$(find "$REPORT_DIR" -type f | wc -l)
-          echo "📊 Report contains $FILE_COUNT files"
+          FILE_COUNT=$(find "$REPORT_DIR" -type f 2>/dev/null | wc -l)
+          DIR_COUNT=$(find "$REPORT_DIR" -type d 2>/dev/null | wc -l)
+          
+          echo ""
+          echo "Selected report structure:"
+          echo "   - Total directories: $DIR_COUNT"
+          echo "   - Total files: $FILE_COUNT"
           
           if [ "$FILE_COUNT" -lt 10 ]; then
-            echo "⚠️ Report directory seems sparse ($FILE_COUNT files) — may not have test data"
+            echo "   ⚠️  WARNING: Very few files ($FILE_COUNT) — report may be incomplete!"
           fi
 
-          # Build a ZIP of the ENTIRE Serenity report directory
-          # Includes index.html + all CSS/JS/data/screenshots/reports
-          # This ensures everything loads properly when extracted
+          # Build ZIP
           ZIP_PATH="serenity-full-report-${{ matrix.env }}.zip"
-          echo "Creating ZIP: $ZIP_PATH from $REPORT_DIR"
+          echo ""
+          echo "Creating ZIP: $ZIP_PATH"
           
           if [ "$FILE_COUNT" -gt 0 ]; then
+            echo "   Compressing $FILE_COUNT files..."
             (cd "$(dirname $REPORT_DIR)" && zip -qr "$OLDPWD/$ZIP_PATH" "$(basename $REPORT_DIR)")
             ZIP_SIZE=$(du -h "$ZIP_PATH" | cut -f1)
+            ZIP_CONTENTS=$(unzip -l "$ZIP_PATH" 2>/dev/null | tail -1 | awk '{print $2}')
             echo "report_zip=$ZIP_PATH" >> $GITHUB_OUTPUT
-            echo "✅ Zipped full report → $ZIP_PATH ($ZIP_SIZE with $FILE_COUNT files)"
+            echo ""
+            echo "✅ ZIP created:"
+            echo "   - Size: $ZIP_SIZE"
+            echo "   - Files in ZIP: $ZIP_CONTENTS"
             ls -lh "$ZIP_PATH"
           else
-            echo "⚠️ Report directory is empty, skipping ZIP"
+            echo "   ❌ Cannot create ZIP: report directory is empty!"
             echo "report_zip=" >> $GITHUB_OUTPUT
           fi
 
