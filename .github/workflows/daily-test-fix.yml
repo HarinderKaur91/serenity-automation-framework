@@ -1038,24 +1038,41 @@ jobs:
               }
             }
 
-  auto-verify-on-pr-merge:
+  post-merge-verification:
+    name: 📋 Post-Merge Final Verification — Copilot Fix
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'copilot/')
     runs-on: ubuntu-latest
     steps:
-      - name: Auto-trigger verification rerun
+      - name: Dispatch Verification Rerun (rerun_count=2)
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
           echo "========================================================"
-          echo "Copilot fix PR #${{ github.event.pull_request.number }} merged — triggering verification rerun..."
-          echo "If this rerun also fails, the failure will be escalated directly to JIRA."
+          echo "✅ Copilot PR #$PR_NUMBER has been merged to master"
           echo "========================================================"
-          gh workflow run daily-test-fix.yml \
-            --repo ${{ github.repository }} \
-            --ref master \
-            --field rerun_count=2 \
-            --field env=qa
-          echo "✅ Verification rerun dispatched with rerun_count=2 (final attempt before JIRA escalation)."
+          echo ""
+          echo "🔄 Triggering final verification rerun..."
+          echo "   This will run the same failed tests again (rerun_count=2)"
+          echo "   If they pass: Issue closes ✅"
+          echo "   If they fail: Escalated to JIRA as 'Retries Exhausted' 🐛"
+          echo ""
+          
+          # Use GitHub API to dispatch workflow (more reliable than gh cli)
+          curl -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily-test-fix.yml/dispatches \
+            -d '{
+              "ref":"master",
+              "inputs":{
+                "rerun_count":"2",
+                "env":"qa",
+                "site":"all"
+              }
+            }' \
+            && echo "✅ Verification rerun dispatched successfully" \
+            || echo "⚠️ Failed to dispatch verification rerun"
