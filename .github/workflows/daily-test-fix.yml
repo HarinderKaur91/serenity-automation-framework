@@ -48,6 +48,8 @@ permissions:
 jobs:
   run-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    outputs:
+      test_outcome: ${{ steps.test-outcome.outputs.test_outcome }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -138,10 +140,14 @@ jobs:
             fi
 
             FAILED_COUNT=$(python3 "$PARSER" count 2>/dev/null || echo 0)
+            SKIPPED_COUNT=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
+            RETRIABLE_COUNT=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
             echo ""
             echo "── Diagnostic Summary ──"
             echo "Maven exit code: $PASS1_EXIT (0 = success, non-zero = failure)"
-            echo "Failed test count: $FAILED_COUNT"
+            echo "Failed/error test count: $FAILED_COUNT"
+            echo "Skipped test count: $SKIPPED_COUNT"
+            echo "Retriable test issue count: $RETRIABLE_COUNT"
 
             # ── Snapshot PASS 1 reports BEFORE any PASS 2 `mvn clean` wipes them.
             # The email is sent from this snapshot so the user always sees the
@@ -159,19 +165,41 @@ jobs:
               cp target/rerun.txt pass1-reports/rerun.txt
             fi
 
-            if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
+            if [ "$PASS1_EXIT" -eq 0 ] && [ "$RETRIABLE_COUNT" -eq 0 ]; then
               echo "========================================================"
               echo "✅ PASS 1: All tests passed! Nothing to rerun."
               echo "========================================================"
             else
               echo "========================================================"
-              echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/skipped/error count=$FAILED_COUNT). Re-running ONLY failed scenarios..."
+              echo "❌ PASS 1: Test issues detected (exit=$PASS1_EXIT, failed/error=$FAILED_COUNT, skipped=$SKIPPED_COUNT)."
               echo "========================================================"
 
               # Cucumber's rerun plugin writes failed scenario URIs to target/rerun.txt,
               # one per line, e.g.:
               #   src/test/resources/features/saucedemo/login.feature:7
-              if [ -s "target/rerun.txt" ]; then
+              if [ "$SKIPPED_COUNT" -gt 0 ]; then
+                echo "🔄 PASS 2: Skipped scenarios detected. Re-running the full suite once so skipped cases are retried as well..."
+                set +e
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
+                PASS2_EXIT=$?
+                set -e
+
+                PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
+                PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
+                PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
+                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
+
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                  echo "========================================================"
+                  echo "✅ PASS 2: Previously failed/skipped scenarios now pass. No issue raised."
+                  echo "========================================================"
+                else
+                  echo "========================================================"
+                  echo "❌ PASS 2: Failures or skipped scenarios persist after rerun. Raising GitHub issue for investigation..."
+                  echo "========================================================"
+                  exit 1
+                fi
+              elif [ -s "target/rerun.txt" ]; then
                 echo "── Failed scenarios (target/rerun.txt) ──"
                 cat target/rerun.txt
                 echo "─────────────────────────────────────────"
@@ -193,15 +221,17 @@ jobs:
                 rm -f rerun.txt
 
                 PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
-                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED ──"
+                PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
+                PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
+                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
                   echo "========================================================"
-                  echo "✅ PASS 2: Previously failed scenarios now pass — flaky failures only. No issue raised."
+                  echo "✅ PASS 2: Previously failed scenarios now pass. No issue raised."
                   echo "========================================================"
                 else
                   echo "========================================================"
-                  echo "❌ PASS 2: Failures persist on rerun. Raising GitHub issue for investigation..."
+                  echo "❌ PASS 2: Failures or skipped scenarios persist on rerun. Raising GitHub issue for investigation..."
                   echo "========================================================"
                   exit 1
                 fi
@@ -215,11 +245,13 @@ jobs:
                 PASS2_EXIT=$?
                 set -e
                 PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
-                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED ──"
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
+                PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
+                PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
+                echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
                   echo "✅ PASS 2 (fallback): All tests now pass! Likely flaky."
                 else
-                  echo "❌ PASS 2 (fallback): Still failing. Raising GitHub issue..."
+                  echo "❌ PASS 2 (fallback): Failures or skipped scenarios still present. Raising GitHub issue..."
                   exit 1
                 fi
               fi
@@ -230,7 +262,9 @@ jobs:
 
       - name: Save test outcome
         if: always()
+        id: test-outcome
         run: |
+          echo "test_outcome=${{ steps.run.outcome }}" >> $GITHUB_OUTPUT
           echo "Test outcome: ${{ steps.run.outcome }}" > test-outcome.txt
 
       - name: Upload Reports
@@ -459,7 +493,7 @@ jobs:
 
   report-success:
     needs: run-tests
-    if: needs.run-tests.result == 'success'
+    if: needs.run-tests.outputs.test_outcome == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: All Tests Passed
@@ -565,7 +599,7 @@ jobs:
 
   open-issue-and-assign-copilot:
     needs: run-tests
-    if: always() && (needs.run-tests.result == 'failure' || needs.run-tests.result == 'error')
+    if: always() && needs.run-tests.outputs.test_outcome == 'failure'
     runs-on: ubuntu-latest
 
     steps:
