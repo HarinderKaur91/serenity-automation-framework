@@ -19,8 +19,11 @@ public class MagentoHomePage extends PageObject {
 
     public java.util.List<String> getProductResults() {
         $(PRODUCT_RESULTS).waitUntilVisible();
-        return findAll(PRODUCT_RESULTS).stream()
+        java.util.List<WebElementFacade> elements = findAll(PRODUCT_RESULTS);
+        if (elements == null) return java.util.Collections.emptyList();
+        return elements.stream()
                 .map(WebElementFacade::getText)
+                .filter(t -> t != null && !t.isEmpty())
                 .toList();
     }
 
@@ -30,6 +33,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     public String getPageTitleText() {
+        $(PAGE_TITLE).waitUntilVisible();
         String title = getDriver().getTitle();
         return title == null ? "" : title;
     }
