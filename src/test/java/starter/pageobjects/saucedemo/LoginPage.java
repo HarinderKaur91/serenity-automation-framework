@@ -25,6 +25,7 @@ public class LoginPage extends PageObject {
     }
 
     public String getErrorMessage() {
-        return $(ERROR_MESSAGE).waitUntilVisible().getText();
+        String text = $(ERROR_MESSAGE).waitUntilVisible().getAttribute("textContent");
+        return text == null ? "" : text.trim();
     }
 }
