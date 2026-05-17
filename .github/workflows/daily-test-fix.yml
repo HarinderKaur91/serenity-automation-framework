@@ -539,85 +539,124 @@ jobs:
 
             // ── 3. Render structured issue body ──────────────────────────────
             if (failures.length) {
-              body += `### Persistent Failures After Rerun — PASS 2 (${failures.length} scenario(s) still failing)\n\n`;
-              
-              // Extract feature files from failedLocations
-              // e.g., "src/test/resources/features/saucedemo/login.feature:7" → "login.feature"
-              const featureMap = new Map(); // feature file name → [failures]
-              const featureFiles = new Set();
+              // Group failures by SITE + FEATURE FILE
+              // e.g., "src/test/resources/features/saucedemo/login.feature:7" → site="saucedemo", feature="login.feature"
+              const siteFeatureMap = new Map(); // "saucedemo/login.feature" → [failures]
+              const siteMap = new Map(); // "saucedemo" → { feature1: [...], feature2: [...] }
               
               for (const loc of failedLocations) {
-                const featureName = loc.split('/').pop().split(':')[0]; // "login.feature:7" → "login.feature"
-                featureFiles.add(featureName);
+                // Extract site name and feature file
+                // e.g., "src/test/resources/features/saucedemo/login.feature:7"
+                const parts = loc.split('/');
+                const featureName = parts[parts.length - 1].split(':')[0]; // "login.feature:7" → "login.feature"
+                const siteName = parts[parts.length - 2]; // "saucedemo"
+                const key = `${siteName}/${featureName}`;
+                
+                if (!siteMap.has(siteName)) {
+                  siteMap.set(siteName, new Map());
+                }
+                if (!siteMap.get(siteName).has(featureName)) {
+                  siteMap.get(siteName).set(featureName, []);
+                }
               }
-              console.log(`Feature files from rerun.txt: ${Array.from(featureFiles).join(', ')}`);
               
-              // Assign each failure to a feature file
+              // Assign each failure to site + feature file
               for (const f of failures) {
-                // Try to find matching feature file from stack trace or failedLocations
+                let siteName = null;
                 let featureName = null;
                 
-                // First try: look for feature file path in the stack trace
+                // First try: extract from stack trace
                 const stackLines = f.stack.split('\n');
                 for (const line of stackLines) {
-                  const featureMatch = line.match(/(\w+\.feature):(\d+)/);
-                  if (featureMatch) {
-                    featureName = featureMatch[1]; // e.g., "login.feature"
+                  const pathMatch = line.match(/features\/(\w+)\/(\w+\.feature):/);
+                  if (pathMatch) {
+                    siteName = pathMatch[1]; // e.g., "saucedemo"
+                    featureName = pathMatch[2]; // e.g., "login.feature"
                     break;
                   }
                 }
                 
                 // Second try: match via failedLocations
-                if (!featureName && failedLocations.length > 0) {
-                  featureName = failedLocations[0].split('/').pop().split(':')[0];
+                if (!siteName && !featureName && failedLocations.length > 0) {
+                  const parts = failedLocations[0].split('/');
+                  featureName = parts[parts.length - 1].split(':')[0];
+                  siteName = parts[parts.length - 2];
                 }
                 
                 // Fallback
-                if (!featureName) {
-                  featureName = 'Scenarios';
-                }
+                if (!siteName) siteName = 'unknown-site';
+                if (!featureName) featureName = 'unknown.feature';
                 
-                if (!featureMap.has(featureName)) {
-                  featureMap.set(featureName, []);
+                if (!siteMap.has(siteName)) {
+                  siteMap.set(siteName, new Map());
                 }
-                featureMap.get(featureName).push(f);
-                console.log(`Mapped failure "${f.scenario}" to feature file "${featureName}"`);
+                if (!siteMap.get(siteName).has(featureName)) {
+                  siteMap.get(siteName).set(featureName, []);
+                }
+                siteMap.get(siteName).get(featureName).push(f);
+                console.log(`Mapped: "${f.scenario}" → ${siteName}/${featureName}`);
               }
-
-              // Render grouped by feature file
-              for (const [featureName, featureFailures] of featureMap.entries()) {
-                body += `#### 📄 ${featureName}\n\n`;
-                for (const f of featureFailures.slice(0, 10)) {
-                  body += `**❌ ${f.scenario}** (Scenario)\n`;
+              
+              // Create summary header
+              body += `## Failed Scenarios by Website\n\n`;
+              body += `The following test scenarios failed across **${siteMap.size}** website(s). Each failure is grouped by site and feature file for easy analysis.\n\n`;
+              
+              // Count failures per site
+              const siteCounts = new Map();
+              for (const [site, features] of siteMap) {
+                let count = 0;
+                for (const failures of features.values()) {
+                  count += failures.length;
+                }
+                siteCounts.set(site, count);
+              }
+              
+              // Render by site (with nice emoji indicators)
+              const siteEmoji = {
+                'saucedemo': '🍅',
+                'herokuapp': '🦸',
+                'magento': '🛒'
+              };
+              
+              for (const [siteName, features] of siteMap) {
+                const emoji = siteEmoji[siteName] || '🌐';
+                const count = siteCounts.get(siteName);
+                body += `### ${emoji} ${siteName.charAt(0).toUpperCase() + siteName.slice(1)} (${count} failure${count !== 1 ? 's' : ''})\n\n`;
+                
+                // Render features under this site
+                for (const [featureName, siteFeatureFailures] of features) {
+                  body += `#### 📄 ${featureName}\n\n`;
                   
-                  // Extract the specific failed Gherkin step from stack
-                  // Stack lines typically look like: "at ✽.Given I open... (file:src/...feature:7)"
-                  const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
-                  let failedStep = '';
-                  if (stepLines.length > 0) {
-                    const firstStep = stepLines[0].trim();
-                    // Extract step text between symbol and file path
-                    const stepMatch = firstStep.match(/[✽✓✗]\.(.+?)\s*\(file:/);
-                    if (stepMatch && stepMatch[1]) {
-                      failedStep = stepMatch[1].trim();
+                  for (const f of siteFeatureFailures.slice(0, 10)) {
+                    body += `**❌ ${f.scenario}** (Scenario)\n`;
+                    
+                    // Extract the specific failed Gherkin step from stack
+                    const stepLines = f.stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
+                    let failedStep = '';
+                    if (stepLines.length > 0) {
+                      const firstStep = stepLines[0].trim();
+                      const stepMatch = firstStep.match(/[✽✓✗]\.(.+?)\s*\(file:/);
+                      if (stepMatch && stepMatch[1]) {
+                        failedStep = stepMatch[1].trim();
+                      }
                     }
+                    if (failedStep) {
+                      body += `**Failed step:** \`${failedStep}\`\n\n`;
+                    }
+                    
+                    body += `- **Class:** \`${f.classname}\`\n`;
+                    body += `- **Error type:** \`${f.type}\`\n`;
+                    body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
+                    
+                    // Show all failed steps in details
+                    if (stepLines.length) {
+                      body += `**All Failed Gherkin Steps:**\n`;
+                      for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
+                      body += `\n`;
+                    }
+                    const trimmedStack = f.stack.split('\n').slice(0, 25).join('\n');
+                    body += `<details><summary>Stack trace</summary>\n\n\`\`\`\n${trimmedStack}\n\`\`\`\n\n</details>\n\n`;
                   }
-                  if (failedStep) {
-                    body += `**Failed step:** \`${failedStep}\`\n\n`;
-                  }
-                  
-                  body += `- **Class:** \`${f.classname}\`\n`;
-                  body += `- **Error type:** \`${f.type}\`\n`;
-                  body += `- **Message:** ${f.message || '_(no message)_'}\n\n`;
-                  
-                  // Show all failed steps in details
-                  if (stepLines.length) {
-                    body += `**All Failed Gherkin Steps:**\n`;
-                    for (const s of stepLines.slice(0, 5)) body += `> ${s.trim()}\n`;
-                    body += `\n`;
-                  }
-                  const trimmedStack = f.stack.split('\n').slice(0, 25).join('\n');
-                  body += `<details><summary>Stack trace</summary>\n\n\`\`\`\n${trimmedStack}\n\`\`\`\n\n</details>\n\n`;
                 }
               }
               if (failures.length > 10) body += `_…and ${failures.length - 10} more failure(s) — see full reports in workflow artifacts._\n\n`;
