@@ -19,11 +19,7 @@ public class MagentoHomePage extends PageObject {
 
     public java.util.List<String> getProductResults() {
         $(PRODUCT_RESULTS).waitUntilVisible();
-        java.util.List<WebElementFacade> results = findAll(PRODUCT_RESULTS);
-        if (results == null) {
-            return java.util.List.of();
-        }
-        return results.stream()
+        return findAll(PRODUCT_RESULTS).stream()
                 .map(WebElementFacade::getText)
                 .toList();
     }
