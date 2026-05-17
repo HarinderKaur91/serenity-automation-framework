@@ -2,7 +2,7 @@
 """Parse Maven Failsafe XML reports.
 
 Usage:
-    python3 parse_failsafe.py count     # prints total failed+error+skipped count
+    python3 parse_failsafe.py count     # prints total failed+error count
     python3 parse_failsafe.py classes   # prints comma-separated FQCNs of affected test classes
 """
 import os
@@ -24,13 +24,11 @@ if os.path.isdir(base):
                     count += (
                         int(r.get('failures', '0'))
                         + int(r.get('errors', '0'))
-                        + int(r.get('skipped', '0'))
                     )
                     for tc in r.findall('testcase'):
                         if (
                             tc.find('failure') is not None
                             or tc.find('error') is not None
-                            or tc.find('skipped') is not None
                         ):
                             cn = tc.get('classname', '')
                             if cn:
