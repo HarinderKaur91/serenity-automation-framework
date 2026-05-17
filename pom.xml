@@ -144,6 +144,7 @@
                 <version>${serenity.version}</version>
                 <configuration>
                     <tags>${tags}</tags>
+                    <project.name>Serenity Automation Tests</project.name>
                 </configuration>
                 <executions>
                     <execution>
@@ -154,6 +155,18 @@
                         </goals>
                     </execution>
                 </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>net.serenity-bdd</groupId>
+                        <artifactId>serenity-core</artifactId>
+                        <version>${serenity.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>net.serenity-bdd</groupId>
+                        <artifactId>serenity-report-resources</artifactId>
+                        <version>${serenity.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
         </plugins>
     </build>
