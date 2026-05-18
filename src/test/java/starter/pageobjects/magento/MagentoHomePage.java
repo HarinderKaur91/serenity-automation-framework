@@ -18,8 +18,8 @@ public class MagentoHomePage extends PageObject {
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
     private static final By LOADING_MASK = By.cssSelector(".loading-mask");
     private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
-    private static final int MAX_SSL_ERROR_RETRIES = 6;
-    private static final long CLOUDFLARE_RETRY_DELAY_MILLIS = 5000L;
+    private static final int MAX_SSL_ERROR_RETRIES = Integer.getInteger("magento.cloudflare.ssl.max.retries", 6);
+    private static final long BASE_CLOUDFLARE_RETRY_DELAY_MILLIS = Long.getLong("magento.cloudflare.ssl.retry.delay.millis", 2000L);
     private String lastSearchTerm;
 
     public void searchFor(String term) {
@@ -81,7 +81,7 @@ public class MagentoHomePage extends PageObject {
                 if (!isCloudflareSslErrorPage() || lastSearchTerm == null || attempt == MAX_SSL_ERROR_RETRIES) {
                     throw e;
                 }
-                waitBeforeRetry();
+                waitBeforeRetry(attempt);
                 searchFor(lastSearchTerm);
             }
         }
@@ -94,10 +94,11 @@ public class MagentoHomePage extends PageObject {
         }
     }
 
-    private void waitBeforeRetry() {
+    private void waitBeforeRetry(int attempt) {
+        long delayInMillis = BASE_CLOUDFLARE_RETRY_DELAY_MILLIS * (1L << Math.min(attempt - 1, MAX_SSL_ERROR_RETRIES - 1));
         try {
-            Thread.sleep(CLOUDFLARE_RETRY_DELAY_MILLIS);
-        } catch (InterruptedException interruptedException) {
+            Thread.sleep(delayInMillis);
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
@@ -113,7 +114,6 @@ public class MagentoHomePage extends PageObject {
         return pageSource != null
                 && pageSource.contains("cf-error-details")
                 && (pageSource.contains("Error code 526")
-                || pageSource.contains("Invalid SSL certificate")
-                || pageSource.contains("Cloudflare"));
+                || pageSource.contains("Invalid SSL certificate"));
     }
 }
