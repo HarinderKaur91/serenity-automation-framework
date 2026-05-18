@@ -858,16 +858,23 @@ jobs:
             console.log(`Using rerun.txt: ${rerunFile || 'none'} (${failedLocations.length} unique entries)`);
 
             // ── 2. Parse failsafe XML for scenario name + failure message ────
-            // Use PASS 2 results ONLY — exclude pass1-reports snapshot so we only
-            // show scenarios that STILL FAIL after the rerun (persistent failures).
-            const xmlFiles = allFiles.filter(f => 
-              f.includes('failsafe-reports') && 
-              !f.includes('pass1-reports') && 
+            // Prefer PASS 2 results (failures that PERSISTED after the rerun).
+            // If none (PASS 2 may not have produced XML, e.g. `mvn clean` wiped
+            // it or the rerun was skipped), fall back to PASS 1 so the issue
+            // always carries failure details.
+            const pass2Xmls = allFiles.filter(f =>
+              f.includes('failsafe-reports') &&
+              !f.includes('pass1-reports') &&
               /TEST-.*\.xml$/.test(f)
             );
-            console.log(`PASS 2 failsafe XML files (after excluding pass1-reports): ${xmlFiles.length}`);
-            console.log(`  Files: ${xmlFiles.join('\n  ')}`);
-            
+            const pass1Xmls = allFiles.filter(f =>
+              f.includes('pass1-reports') &&
+              f.includes('failsafe-reports') &&
+              /TEST-.*\.xml$/.test(f)
+            );
+            console.log(`PASS 2 failsafe XML files: ${pass2Xmls.length}`);
+            console.log(`PASS 1 failsafe XML files: ${pass1Xmls.length}`);
+
             const failures = []; // { scenario, classname, message, type, stack, location }
 
             // Order-independent attribute extractor.
@@ -877,38 +884,49 @@ jobs:
               return m ? m[1] : '';
             }
 
-            for (const xml of xmlFiles) {
-              const content = fs.readFileSync(xml, 'utf8');
-              // Match each <testcase ...>...</testcase> AND self-closing <testcase .../> .
-              const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
-              let m;
-              while ((m = caseRegex.exec(content)) !== null) {
-                const tagAttrs = m[1];
-                const inner = m[3] || '';
-                const name = attr(tagAttrs, 'name');
-                const classname = attr(tagAttrs, 'classname');
-                if (!name) continue;
-
-                // Find <failure>/<error>; tolerate self-closing tags and any attribute order.
-                const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
-                const failMatch = inner.match(failBlockRe);
-                if (!failMatch) continue;
-                const failAttrs = failMatch[2];
-                const stackRaw = failMatch[4] || '';
-                const message = attr(failAttrs, 'message');
-                const type = attr(failAttrs, 'type');
-                const stack = stackRaw
-                  .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
-                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-                  .trim();
-                failures.push({ scenario: name, classname, message, type, stack });
+            function parseXmls(xmlList) {
+              const found = [];
+              for (const xml of xmlList) {
+                const content = fs.readFileSync(xml, 'utf8');
+                const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
+                let m;
+                while ((m = caseRegex.exec(content)) !== null) {
+                  const tagAttrs = m[1];
+                  const inner = m[3] || '';
+                  const name = attr(tagAttrs, 'name');
+                  const classname = attr(tagAttrs, 'classname');
+                  if (!name) continue;
+                  const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
+                  const failMatch = inner.match(failBlockRe);
+                  if (!failMatch) continue;
+                  const failAttrs = failMatch[2];
+                  const stackRaw = failMatch[4] || '';
+                  const message = attr(failAttrs, 'message');
+                  const type = attr(failAttrs, 'type');
+                  const stack = stackRaw
+                    .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+                    .trim();
+                  found.push({ scenario: name, classname, message, type, stack });
+                }
               }
+              return found;
             }
-            console.log(`Parsed ${failures.length} <failure>/<error> entries from PASS 2 XML files.`);
 
-            // If PASS 2 produced no failures, the rerun passed — nothing to escalate.
-            if (failures.length === 0) {
-              console.log('✅ PASS 2 yielded zero failures — skipping issue creation.');
+            failures.push(...parseXmls(pass2Xmls));
+            console.log(`Parsed ${failures.length} <failure>/<error> entries from PASS 2 XML.`);
+
+            if (failures.length === 0 && pass1Xmls.length > 0) {
+              console.log(`PASS 2 yielded 0 failures — falling back to PASS 1 snapshot.`);
+              failures.push(...parseXmls(pass1Xmls));
+              console.log(`After PASS 1 fallback: ${failures.length} failure(s).`);
+            }
+
+            // If we STILL have no failures AND no rerun.txt entries, the job
+            // probably ran with test_outcome=failure for non-test reasons
+            // (e.g. Maven crash). Skip issue creation in that edge case.
+            if (failures.length === 0 && failedLocations.length === 0) {
+              console.log('⚠️ No failures parsed and no rerun.txt entries — skipping issue creation.');
               return;
             }
 
@@ -1103,7 +1121,7 @@ jobs:
             core.setOutput('issue_number', String(issueNumber));
 
       - name: Assign Copilot To Issue
-        if: github.event.inputs.rerun_count == '' || github.event.inputs.rerun_count == '0' || github.event.inputs.rerun_count == '1'
+        if: (github.event.inputs.rerun_count == '' || github.event.inputs.rerun_count == '0' || github.event.inputs.rerun_count == '1') && steps.issue.outputs.issue_number != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.COPILOT_TOKEN }}
@@ -1123,7 +1141,7 @@ jobs:
             console.log(`Copilot assigned to issue #${issueNumber}`);
 
       - name: Escalate To JIRA - Retries Exhausted
-        if: github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0' && github.event.inputs.rerun_count != '1'
+        if: github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0' && github.event.inputs.rerun_count != '1' && steps.issue.outputs.issue_number != ''
         uses: actions/github-script@v7
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
@@ -1205,42 +1223,58 @@ jobs:
             }
 
             // ── Extract actual Gherkin steps from failures ──────────────────
-            // Parse failsafe XML — attribute order independent, tolerates self-closing tags.
-            const xmlFiles = allFiles.filter(f =>
+            // Prefer PASS 2 (post-rerun) XML; fall back to PASS 1 snapshot when
+            // PASS 2 produced none. Both parsers are attribute-order independent
+            // and tolerate self-closing tags.
+            const pass2Xmls = allFiles.filter(f =>
               f.includes('failsafe-reports') &&
               !f.includes('pass1-reports') &&
+              /TEST-.*\.xml$/.test(f)
+            );
+            const pass1Xmls = allFiles.filter(f =>
+              f.includes('pass1-reports') &&
+              f.includes('failsafe-reports') &&
               /TEST-.*\.xml$/.test(f)
             );
             function attr(tag, name) {
               const re = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`);
               const m = tag.match(re); return m ? m[1] : '';
             }
-            const failures = [];
-            for (const xml of xmlFiles) {
-              const content = fs.readFileSync(xml, 'utf8');
-              const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
-              let m;
-              while ((m = caseRegex.exec(content)) !== null) {
-                const tagAttrs = m[1];
-                const inner = m[3] || '';
-                const name = attr(tagAttrs, 'name');
-                const classname = attr(tagAttrs, 'classname');
-                if (!name) continue;
-                const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
-                const failMatch = inner.match(failBlockRe);
-                if (!failMatch) continue;
-                const failAttrs = failMatch[2];
-                const stackRaw = failMatch[4] || '';
-                const message = attr(failAttrs, 'message');
-                const type = attr(failAttrs, 'type');
-                const stack = stackRaw
-                  .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
-                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-                  .trim();
-                failures.push({ scenario: name, classname, message, type, stack });
+            function parseXmls(xmlList) {
+              const out = [];
+              for (const xml of xmlList) {
+                const content = fs.readFileSync(xml, 'utf8');
+                const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
+                let m;
+                while ((m = caseRegex.exec(content)) !== null) {
+                  const tagAttrs = m[1];
+                  const inner = m[3] || '';
+                  const name = attr(tagAttrs, 'name');
+                  const classname = attr(tagAttrs, 'classname');
+                  if (!name) continue;
+                  const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
+                  const failMatch = inner.match(failBlockRe);
+                  if (!failMatch) continue;
+                  const failAttrs = failMatch[2];
+                  const stackRaw = failMatch[4] || '';
+                  const message = attr(failAttrs, 'message');
+                  const type = attr(failAttrs, 'type');
+                  const stack = stackRaw
+                    .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+                    .trim();
+                  out.push({ scenario: name, classname, message, type, stack });
+                }
               }
+              return out;
             }
+            const failures = parseXmls(pass2Xmls);
             console.log(`Parsed ${failures.length} <failure>/<error> entries from PASS 2 XML.`);
+            if (failures.length === 0 && pass1Xmls.length > 0) {
+              console.log(`PASS 2 yielded 0 failures — falling back to PASS 1 snapshot (${pass1Xmls.length} XML file(s)).`);
+              failures.push(...parseXmls(pass1Xmls));
+              console.log(`After PASS 1 fallback: ${failures.length} failure(s).`);
+            }
 
             // Dedupe by scenario+classname
             const seen = new Set();
