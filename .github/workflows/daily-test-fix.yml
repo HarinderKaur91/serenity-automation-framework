@@ -417,105 +417,112 @@ jobs:
       - name: Prepare Email Content
         if: always()
         id: email-content
+        env:
+          MATRIX_ENV: ${{ matrix.env }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+          REPORT_ZIP: ${{ steps.report.outputs.report_zip }}
+          REPORT_ZIP_SIZE: ${{ steps.report.outputs.report_zip_size }}
+          REPORT_TOO_LARGE: ${{ steps.report.outputs.report_too_large }}
+        shell: bash
         run: |
-          if [ -n "${{ steps.report.outputs.report_zip }}" ]; then
-            if [ "${{ steps.run.outcome }}" = "failure" ]; then
-              EMAIL_STATUS="FAILURES DETECTED ❌"
-            elif [ "${{ steps.run.outcome }}" = "success" ]; then
-              EMAIL_STATUS="ALL PASSED ✅"
-            elif [ "${{ steps.run.outcome }}" = "skipped" ]; then
-              EMAIL_STATUS="SKIPPED ⏭️"
+          set -euo pipefail
+
+          if [ -n "${REPORT_ZIP}" ]; then
+            case "${RUN_OUTCOME}" in
+              failure) EMAIL_STATUS="FAILURES DETECTED ❌" ;;
+              success) EMAIL_STATUS="ALL PASSED ✅" ;;
+              skipped) EMAIL_STATUS="SKIPPED ⏭️" ;;
+              *)       EMAIL_STATUS="ERROR ⚠️" ;;
+            esac
+
+            ARTIFACTS_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}#artifacts"
+
+            if [ "${REPORT_TOO_LARGE}" = "true" ]; then
+              REPORT_SECTION=$(printf '%s\n' \
+                "📦 Serenity report (download from workflow artifacts)" \
+                "────────────────────────────────────────────────────" \
+                "The full Serenity report (${REPORT_ZIP_SIZE}) exceeds Gmail's 25 MB" \
+                "attachment limit, so it is published as a workflow artifact instead." \
+                "" \
+                "🔗 Download link:" \
+                "   ${ARTIFACTS_URL}" \
+                "" \
+                "   (Sign in to GitHub, scroll to the \"Artifacts\" section at the" \
+                "    bottom of the run page, and download \"serenity-full-report-${MATRIX_ENV}\".)")
             else
-              EMAIL_STATUS="ERROR ⚠️"
+              REPORT_SECTION=$(printf '%s\n' \
+                "📎 Serenity report attached (ZIP, ${REPORT_ZIP_SIZE})" \
+                "──────────────────────────────────────────────────" \
+                "The full Serenity report folder is attached to this email as a ZIP archive.")
             fi
 
-            ZIP_SIZE_LABEL="${{ steps.report.outputs.report_zip_size }}"
-            ARTIFACTS_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+            EMAIL_SUBJECT="Test Report [${MATRIX_ENV}] — ${EMAIL_STATUS} — ${REPO}"
 
-            if [ "${{ steps.report.outputs.report_too_large }}" = "true" ]; then
-              REPORT_SECTION=$(cat <<RPT
-            📦 Serenity report (download from workflow artifacts)
-            ────────────────────────────────────────────────────
-            The full Serenity report (${ZIP_SIZE_LABEL}) exceeds Gmail's 25 MB
-            attachment limit, so it is published as a workflow artifact instead.
-
-            🔗 Download link:
-               ${ARTIFACTS_URL}
-
-               (Sign in to GitHub, scroll to the "Artifacts" section at the
-                bottom of the run page, and download "serenity-full-report-${{ matrix.env }}".)
-            RPT
-            )
-            else
-              REPORT_SECTION=$(cat <<RPT
-            📎 Serenity report attached (ZIP, ${ZIP_SIZE_LABEL})
-            ──────────────────────────────────────────────────
-            The full Serenity report folder is attached to this email as a ZIP archive.
-            RPT
-            )
-            fi
-
-            cat <<EOF >> "$GITHUB_OUTPUT"
-            email_subject=Test Report [${{ matrix.env }}] — ${EMAIL_STATUS} — ${{ github.repository }}
-            email_body<<__EMAIL__
-            Hi,
-
-            The daily test run has completed.
-
-            📊 Test Summary
-            ───────────────
-            Environment: ${{ matrix.env }}
-            Status: ${{ steps.run.outcome }}
-            Repository: ${{ github.repository }}
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            ${REPORT_SECTION}
-
-            🔧 How to open it (IMPORTANT — must be extracted first):
-              1. Download the .zip file.
-              2. Right-click the .zip → "Extract All..." (Windows) or double-click on macOS.
-                 ⚠️  Do NOT open index.html from inside the zip viewer — it will look broken.
-              3. Open the extracted folder.
-              4. Double-click index.html to open it in Chrome or Edge.
-
-            📋 What's included in the report:
-              • All test scenarios with pass/fail details and statistics
-              • Individual Gherkin steps with their execution results
-              • Failure screenshots and detailed error logs
-              • Full test execution timeline and summary
-              • Click through each scenario for detailed step logs
-
-            — Self-Healing Test Framework
-            __EMAIL__
-            EOF
+            EMAIL_BODY=$(printf '%s\n' \
+              "Hi," \
+              "" \
+              "The daily test run has completed." \
+              "" \
+              "📊 Test Summary" \
+              "───────────────" \
+              "Environment: ${MATRIX_ENV}" \
+              "Status: ${RUN_OUTCOME}" \
+              "Repository: ${REPO}" \
+              "Run: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}" \
+              "" \
+              "${REPORT_SECTION}" \
+              "" \
+              "🔧 How to open it (IMPORTANT — must be extracted first):" \
+              "  1. Download the .zip file." \
+              "  2. Right-click the .zip → \"Extract All...\" (Windows) or double-click on macOS." \
+              "     ⚠️  Do NOT open index.html from inside the zip viewer — it will look broken." \
+              "  3. Open the extracted folder." \
+              "  4. Double-click index.html to open it in Chrome or Edge." \
+              "" \
+              "📋 What's included in the report:" \
+              "  • All test scenarios with pass/fail details and statistics" \
+              "  • Individual Gherkin steps with their execution results" \
+              "  • Failure screenshots and detailed error logs" \
+              "  • Full test execution timeline and summary" \
+              "  • Click through each scenario for detailed step logs" \
+              "" \
+              "— Self-Healing Test Framework")
           else
-            cat <<EOF >> "$GITHUB_OUTPUT"
-            email_subject=Test Report [${{ matrix.env }}] — ⚠️ NO REPORT GENERATED — ${{ github.repository }}
-            email_body<<__EMAIL__
-            Hi,
-
-            The daily test run has completed.
-
-            📊 Test Summary
-            ───────────────
-            Environment: ${{ matrix.env }}
-            Status: ${{ steps.run.outcome }}
-            Repository: ${{ github.repository }}
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            ⚠️ No Serenity report was generated for this run.
-
-            This could indicate:
-              • Maven build failed before generating reports
-              • No tests were executed
-              • Report directory is missing
-
-            Check the GitHub Actions log for details.
-
-            — Self-Healing Test Framework
-            __EMAIL__
-            EOF
+            EMAIL_SUBJECT="Test Report [${MATRIX_ENV}] — ⚠️ NO REPORT GENERATED — ${REPO}"
+            EMAIL_BODY=$(printf '%s\n' \
+              "Hi," \
+              "" \
+              "The daily test run has completed." \
+              "" \
+              "📊 Test Summary" \
+              "───────────────" \
+              "Environment: ${MATRIX_ENV}" \
+              "Status: ${RUN_OUTCOME}" \
+              "Repository: ${REPO}" \
+              "Run: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}" \
+              "" \
+              "⚠️ No Serenity report was generated for this run." \
+              "" \
+              "This could indicate:" \
+              "  • Maven build failed before generating reports" \
+              "  • No tests were executed" \
+              "  • Report directory is missing" \
+              "" \
+              "Check the GitHub Actions log for details." \
+              "" \
+              "— Self-Healing Test Framework")
           fi
+
+          # Emit subject as a single-line output and body as a multi-line output
+          # using a random delimiter (required by GitHub Actions for multi-line values).
+          DELIM="EMAIL_BODY_EOF_$(date +%s%N)"
+          {
+            printf 'email_subject=%s\n' "${EMAIL_SUBJECT}"
+            printf 'email_body<<%s\n%s\n%s\n' "${DELIM}" "${EMAIL_BODY}" "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Email Test Result
         if: always()
