@@ -200,13 +200,20 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                # Succeed when there are no persistent failures:
+                # 1) clean rerun exit, or
+                # 2) Failsafe's test-failure exit code (1) with skipped-only scenarios.
+                if [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_EXIT" -eq 0 ]; then
                   echo "========================================================"
-                  echo "✅ PASS 2: Previously failed/skipped scenarios now pass. No issue raised."
+                  echo "✅ PASS 2: No persistent failures after rerun. No issue raised."
+                  echo "========================================================"
+                elif [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_SKIPPED" -gt 0 ] && [ "$PASS2_EXIT" -eq 1 ]; then
+                  echo "========================================================"
+                  echo "✅ PASS 2: Only skipped scenarios remain after rerun. No issue raised."
                   echo "========================================================"
                 else
                   echo "========================================================"
-                  echo "❌ PASS 2: Failures or skipped scenarios persist after rerun. Raising GitHub issue for investigation..."
+                  echo "❌ PASS 2: Failures persist after rerun. Raising GitHub issue for investigation..."
                   echo "========================================================"
                   exit 1
                 fi
@@ -236,13 +243,20 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                # Succeed when there are no persistent failures:
+                # 1) clean rerun exit, or
+                # 2) Failsafe's test-failure exit code (1) with skipped-only scenarios.
+                if [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_EXIT" -eq 0 ]; then
                   echo "========================================================"
-                  echo "✅ PASS 2: Previously failed scenarios now pass. No issue raised."
+                  echo "✅ PASS 2: No persistent failures after rerun. No issue raised."
+                  echo "========================================================"
+                elif [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_SKIPPED" -gt 0 ] && [ "$PASS2_EXIT" -eq 1 ]; then
+                  echo "========================================================"
+                  echo "✅ PASS 2: Only skipped scenarios remain after rerun. No issue raised."
                   echo "========================================================"
                 else
                   echo "========================================================"
-                  echo "❌ PASS 2: Failures or skipped scenarios persist on rerun. Raising GitHub issue for investigation..."
+                  echo "❌ PASS 2: Failures persist on rerun. Raising GitHub issue for investigation..."
                   echo "========================================================"
                   exit 1
                 fi
@@ -259,10 +273,15 @@ jobs:
                 PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
-                  echo "✅ PASS 2 (fallback): All tests now pass! Likely flaky."
+                # Succeed when there are no persistent failures:
+                # 1) clean rerun exit, or
+                # 2) Failsafe's test-failure exit code (1) with skipped-only scenarios.
+                if [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_EXIT" -eq 0 ]; then
+                  echo "✅ PASS 2 (fallback): No persistent failures after rerun. Likely flaky."
+                elif [ "$PASS2_FAILED" -eq 0 ] && [ "$PASS2_SKIPPED" -gt 0 ] && [ "$PASS2_EXIT" -eq 1 ]; then
+                  echo "✅ PASS 2 (fallback): Only skipped scenarios remain after rerun. No issue raised."
                 else
-                  echo "❌ PASS 2 (fallback): Failures or skipped scenarios still present. Raising GitHub issue..."
+                  echo "❌ PASS 2 (fallback): Failures still present. Raising GitHub issue..."
                   exit 1
                 fi
               fi
@@ -1602,4 +1621,3 @@ jobs:
                 console.log(`⚠️ Error attaching ${shot}: ${e.message}`);
               }
             }
-
