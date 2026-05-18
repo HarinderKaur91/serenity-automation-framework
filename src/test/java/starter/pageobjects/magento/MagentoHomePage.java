@@ -20,6 +20,7 @@ public class MagentoHomePage extends PageObject {
     private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
     private static final int MAX_SSL_ERROR_RETRIES = Integer.getInteger("magento.cloudflare.ssl.max.retries", 6);
     private static final long BASE_CLOUDFLARE_RETRY_DELAY_MILLIS = Long.getLong("magento.cloudflare.ssl.retry.delay.millis", 2000L);
+    private static final long MAX_CLOUDFLARE_RETRY_DELAY_MILLIS = Long.getLong("magento.cloudflare.ssl.max.retry.delay.millis", 30000L);
     private String lastSearchTerm;
 
     public void searchFor(String term) {
@@ -95,7 +96,10 @@ public class MagentoHomePage extends PageObject {
     }
 
     private void waitBeforeRetry(int attempt) {
-        long delayInMillis = BASE_CLOUDFLARE_RETRY_DELAY_MILLIS * (1L << Math.min(attempt - 1, MAX_SSL_ERROR_RETRIES - 1));
+        long delayInMillis = Math.min(
+                BASE_CLOUDFLARE_RETRY_DELAY_MILLIS * (1L << Math.max(0, attempt - 1)),
+                MAX_CLOUDFLARE_RETRY_DELAY_MILLIS
+        );
         try {
             Thread.sleep(delayInMillis);
         } catch (InterruptedException e) {
@@ -108,7 +112,7 @@ public class MagentoHomePage extends PageObject {
     }
 
     static boolean isCloudflareSslErrorPage(String title, String pageSource) {
-        if (title != null && (title.contains("526: Invalid SSL certificate") || title.contains("Error code 526"))) {
+        if (title != null && title.contains("526: Invalid SSL certificate")) {
             return true;
         }
         return pageSource != null
