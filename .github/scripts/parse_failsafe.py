@@ -17,6 +17,20 @@ skipped_count = 0
 classes = set()
 base = 'target/failsafe-reports'
 
+
+def has_execution_evidence(testcase):
+    system_out = testcase.find('system-out')
+    system_err = testcase.find('system-err')
+    if system_out is not None and (system_out.text or '').strip():
+        return True
+    if system_err is not None and (system_err.text or '').strip():
+        return True
+
+    try:
+        return float(testcase.get('time', '0') or '0') > 0
+    except ValueError:
+        return False
+
 if os.path.isdir(base):
     for root, _dirs, files in os.walk(base):
         for f in files:
@@ -34,7 +48,7 @@ if os.path.isdir(base):
                             cn = tc.get('classname', '')
                             if cn:
                                 classes.add(cn)
-                        if has_skipped:
+                        if has_skipped and has_execution_evidence(tc):
                             skipped_count += 1
                 except Exception:
                     pass
