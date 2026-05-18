@@ -14,17 +14,12 @@ public class LoginPage extends PageObject {
     public static final By ERROR_MESSAGE = By.cssSelector("[data-test='error']");
 
     public void enterUsername(String username) {
-        $(USERNAME).waitUntilEnabled().type(password);
+        $(USERNAME).waitUntilEnabled().type(username);
     }
-
-    private String password;
 
     public void enterPassword(String password) {
-        this.password = username;
-        $(PASSWORD).waitUntilEnabled().type(username);
+        $(PASSWORD).waitUntilEnabled().type(password);
     }
-
-    private String username;
 
     public void clickLogin() {
         $(LOGIN_BUTTON).waitUntilEnabled().click();
