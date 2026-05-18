@@ -3,7 +3,9 @@ package starter.pageobjects.magento;
 import net.serenitybdd.annotations.DefaultUrl;
 import net.serenitybdd.core.pages.PageObject;
 import net.serenitybdd.core.pages.WebElementFacade;
+import net.thucydides.core.webdriver.exceptions.ElementShouldBeEnabledException;
 import org.openqa.selenium.By;
+import org.openqa.selenium.NoSuchElementException;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -23,9 +25,15 @@ public class MagentoHomePage extends PageObject {
                 searchField.waitUntilEnabled().clear();
                 searchField.typeAndEnter(term);
                 return;
-            } catch (RuntimeException ignored) {
+            } catch (ElementShouldBeEnabledException | NoSuchElementException ignored) {
+                openSearchResultsFor(term);
+                return;
             }
         }
+        openSearchResultsFor(term);
+    }
+
+    private void openSearchResultsFor(String term) {
         String encodedTerm = URLEncoder.encode(term, StandardCharsets.UTF_8);
         getDriver().navigate().to(SEARCH_RESULTS_URL + encodedTerm);
     }
