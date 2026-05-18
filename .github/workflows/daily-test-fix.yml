@@ -2,7 +2,7 @@ name: Daily Test And Auto Fix
 
 run-name: >-
   ${{ github.event.inputs.rerun_count != '' && github.event.inputs.rerun_count != '0'
-      && format('Rerun {0} - Verify Fix', github.event.inputs.rerun_count)
+      && format('Rerun Post Merge {0} - Verify Copilot Fix', github.event.inputs.rerun_count)
       || 'Daily Test And Auto Fix' }}
 
 on:
@@ -79,9 +79,9 @@ jobs:
           fi
 
           if [ "${{ github.event.inputs.rerun_count }}" != "0" ] && [ "${{ github.event.inputs.rerun_count }}" != "" ]; then
-            # ── MANUAL RERUN (triggered after Copilot fix) ──────────────────────
+            # ── RERUN POST MERGE (triggered after Copilot fix is merged) ────────
             echo "========================================================"
-            echo "🔄 MANUAL RERUN ${{ github.event.inputs.rerun_count }}: Re-running full suite to verify the Copilot fix..."
+            echo "🔄 RERUN POST MERGE ${{ github.event.inputs.rerun_count }}: Re-running full suite to verify the Copilot fix..."
             echo "========================================================"
             mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
           else
@@ -414,6 +414,62 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Build Email Summary HTML
+        if: always()
+        id: summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer PASS 1 failsafe snapshot so the email reflects the original run.
+          if [ -d "pass1-reports/failsafe-reports" ]; then
+            FAILSAFE_DIR="pass1-reports/failsafe-reports"
+          else
+            FAILSAFE_DIR="target/failsafe-reports"
+          fi
+          OUT="serenity-summary-${{ matrix.env }}.html"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          ATTACHMENTS=""
+          if [ -d "$FAILSAFE_DIR" ]; then
+            python3 .github/scripts/build_email_summary.py \
+              "$FAILSAFE_DIR" "$OUT" "$RUN_URL" "${{ matrix.env }}"
+            echo "summary_html=$OUT" >> $GITHUB_OUTPUT
+            ls -lh "$OUT"
+            ATTACHMENTS="$OUT"
+          else
+            echo "⚠️  No failsafe reports found at $FAILSAFE_DIR — skipping summary HTML."
+            echo "summary_html=" >> $GITHUB_OUTPUT
+          fi
+
+          # Also copy Serenity's own index.html out as a flat attachment.
+          # Note: this is the Serenity shell page; charts on it draw from inline
+          # data so the top-level totals render, but clicking through to
+          # feature/scenario detail pages will not work without the rest of the
+          # report folder (provided via the artifact link).
+          if [ -d "pass1-reports/serenity" ] && [ -f "pass1-reports/serenity/index.html" ]; then
+            SERENITY_SRC="pass1-reports/serenity/index.html"
+          elif [ -f "target/site/serenity/index.html" ]; then
+            SERENITY_SRC="target/site/serenity/index.html"
+          else
+            SERENITY_SRC=""
+          fi
+          if [ -n "$SERENITY_SRC" ]; then
+            SERENITY_OUT="serenity-index-${{ matrix.env }}.html"
+            cp "$SERENITY_SRC" "$SERENITY_OUT"
+            echo "serenity_index_html=$SERENITY_OUT" >> $GITHUB_OUTPUT
+            ls -lh "$SERENITY_OUT"
+            if [ -n "$ATTACHMENTS" ]; then
+              ATTACHMENTS="$ATTACHMENTS,$SERENITY_OUT"
+            else
+              ATTACHMENTS="$SERENITY_OUT"
+            fi
+          else
+            echo "serenity_index_html=" >> $GITHUB_OUTPUT
+          fi
+
+          echo "attachments=$ATTACHMENTS" >> $GITHUB_OUTPUT
+          echo "Final email attachments: $ATTACHMENTS"
+
       - name: Prepare Email Content
         if: always()
         id: email-content
@@ -440,24 +496,28 @@ jobs:
 
             ARTIFACTS_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}#artifacts"
 
-            if [ "${REPORT_TOO_LARGE}" = "true" ]; then
-              REPORT_SECTION=$(printf '%s\n' \
-                "📦 Serenity report (download from workflow artifacts)" \
-                "────────────────────────────────────────────────────" \
-                "The full Serenity report (${REPORT_ZIP_SIZE}) exceeds Gmail's 25 MB" \
-                "attachment limit, so it is published as a workflow artifact instead." \
-                "" \
-                "🔗 Download link:" \
-                "   ${ARTIFACTS_URL}" \
-                "" \
-                "   (Sign in to GitHub, scroll to the \"Artifacts\" section at the" \
-                "    bottom of the run page, and download \"serenity-full-report-${MATRIX_ENV}\".)")
-            else
-              REPORT_SECTION=$(printf '%s\n' \
-                "📎 Serenity report attached (ZIP, ${REPORT_ZIP_SIZE})" \
-                "──────────────────────────────────────────────────" \
-                "The full Serenity report folder is attached to this email as a ZIP archive.")
-            fi
+            REPORT_SECTION=$(printf '%s\n' \
+              "📊 Summary attached (open serenity-summary-${MATRIX_ENV}.html)" \
+              "──────────────────────────────────────────────────────────────" \
+              "The attached HTML shows the pass/fail/skipped totals, a per-class" \
+              "breakdown chart, and the failure messages for this run." \
+              "Open it in any browser." \
+              "" \
+              "🧾 Serenity index attached (open serenity-index-${MATRIX_ENV}.html)" \
+              "──────────────────────────────────────────────────────────────────" \
+              "Serenity's own front page is also attached. The top-level totals" \
+              "render standalone, but clicking through to feature or scenario" \
+              "detail pages will NOT work without the rest of the report folder —" \
+              "use the full ZIP artifact below for drilldown." \
+              "" \
+              "📦 Full Serenity report (with screenshots & step drilldown)" \
+              "─────────────────────────────────────────────────────────────────" \
+              "Published as a workflow artifact (${REPORT_ZIP_SIZE}):" \
+              "   ${ARTIFACTS_URL}" \
+              "" \
+              "   Sign in to GitHub, scroll to the \"Artifacts\" section at the" \
+              "   bottom of the run page, and download \"serenity-full-report-${MATRIX_ENV}\"." \
+              "   Extract the ZIP first, then double-click index.html.")
 
             EMAIL_SUBJECT="Test Report [${MATRIX_ENV}] — ${EMAIL_STATUS} — ${REPO}"
 
@@ -474,20 +534,6 @@ jobs:
               "Run: ${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}" \
               "" \
               "${REPORT_SECTION}" \
-              "" \
-              "🔧 How to open it (IMPORTANT — must be extracted first):" \
-              "  1. Download the .zip file." \
-              "  2. Right-click the .zip → \"Extract All...\" (Windows) or double-click on macOS." \
-              "     ⚠️  Do NOT open index.html from inside the zip viewer — it will look broken." \
-              "  3. Open the extracted folder." \
-              "  4. Double-click index.html to open it in Chrome or Edge." \
-              "" \
-              "📋 What's included in the report:" \
-              "  • All test scenarios with pass/fail details and statistics" \
-              "  • Individual Gherkin steps with their execution results" \
-              "  • Failure screenshots and detailed error logs" \
-              "  • Full test execution timeline and summary" \
-              "  • Click through each scenario for detailed step logs" \
               "" \
               "— Self-Healing Test Framework")
           else
@@ -537,7 +583,7 @@ jobs:
           to: harinder.qa.88@gmail.com
           from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
           body: ${{ steps.email-content.outputs.email_body }}
-          attachments: ${{ steps.report.outputs.email_attachment }}
+          attachments: ${{ steps.summary.outputs.attachments }}
 
   report-success:
     needs: run-tests
@@ -558,7 +604,7 @@ jobs:
             const isRerun = rerunCount !== '0' && rerunCount !== '';
 
             if (isRerun) {
-              console.log(`✅ All tests passed on Rerun ${rerunCount}! No further reruns required.`);
+              console.log(`✅ All tests passed on Rerun Post Merge ${rerunCount}! No further reruns required.`);
               console.log('The Copilot fix has been verified successfully.');
 
               // Close the auto-test-failure issue if open
@@ -580,7 +626,7 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
-                  body: `✅ **All tests passed on Rerun ${rerunCount}.** The fix has been verified. Closing this issue.`
+                  body: `✅ **All tests passed on Rerun Post Merge ${rerunCount}.** The fix has been verified. Closing this issue.`
                 });
                 console.log(`Closed issue #${issue.number} - fix verified.`);
               }
@@ -630,7 +676,7 @@ jobs:
                           body: {
                             type: "doc", version: 1,
                             content: [{ type: "paragraph", content: [{ type: "text",
-                              text: `✅ All tests passed on Rerun ${rerunCount}. Fix verified automatically by the self-healing framework.`
+                              text: `✅ All tests passed on Rerun Post Merge ${rerunCount}. Fix verified automatically by the self-healing framework.`
                             }] }]
                           }
                         })
