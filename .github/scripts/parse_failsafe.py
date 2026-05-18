@@ -19,13 +19,6 @@ base = 'target/failsafe-reports'
 
 
 def has_execution_evidence(testcase):
-    system_out = testcase.find('system-out')
-    system_err = testcase.find('system-err')
-    if system_out is not None and (system_out.text or '').strip():
-        return True
-    if system_err is not None and (system_err.text or '').strip():
-        return True
-
     try:
         return float(testcase.get('time', '0') or '0') > 0
     except ValueError:
