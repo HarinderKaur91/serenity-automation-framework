@@ -887,6 +887,8 @@ jobs:
               body += `> ⚠️ **These are PASS 2 (post-rerun) failures only** — scenarios that failed in the initial run AND still failed after the automatic selective rerun. Flaky scenarios that passed on rerun are excluded.\n\n`;
             }
             body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
+            body += `> 📋 **To verify your fix locally, run only the affected site:**\n`;
+            body += `> \`mvn clean verify -Dheadless.mode=true "-Dcucumber.filter.tags=@${{ github.event.inputs.site || 'all' }}"\`\n\n`;
 
             const allFiles = walk('artifacts');
             console.log(`Total artifact files found: ${allFiles.length}`);
