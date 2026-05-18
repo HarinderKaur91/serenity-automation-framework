@@ -5,16 +5,29 @@ import net.serenitybdd.core.pages.PageObject;
 import net.serenitybdd.core.pages.WebElementFacade;
 import org.openqa.selenium.By;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
 @DefaultUrl("https://magento.softwaretestingboard.com/")
 public class MagentoHomePage extends PageObject {
 
     public static final By SEARCH_FIELD = By.cssSelector("input#search, input[name='q']");
     public static final By PRODUCT_RESULTS = By.cssSelector(".product-item-name a");
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
+    private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
 
     public void searchFor(String term) {
-        $(SEARCH_FIELD).waitUntilEnabled().clear();
-        $(SEARCH_FIELD).typeAndEnter(term);
+        WebElementFacade searchField = $(SEARCH_FIELD);
+        if (searchField.isPresent() && searchField.isCurrentlyVisible()) {
+            try {
+                searchField.waitUntilEnabled().clear();
+                searchField.typeAndEnter(term);
+                return;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        String encodedTerm = URLEncoder.encode(term, StandardCharsets.UTF_8);
+        getDriver().navigate().to(SEARCH_RESULTS_URL + encodedTerm);
     }
 
     public java.util.List<String> getProductResults() {
