@@ -372,60 +372,92 @@ jobs:
             echo "   Compressing $FILE_COUNT files..."
             (cd "$(dirname $REPORT_DIR)" && zip -qr "$OLDPWD/$ZIP_PATH" "$(basename $REPORT_DIR)")
             ZIP_SIZE=$(du -h "$ZIP_PATH" | cut -f1)
+            ZIP_BYTES=$(stat -c%s "$ZIP_PATH" 2>/dev/null || wc -c <"$ZIP_PATH")
             ZIP_CONTENTS=$(unzip -l "$ZIP_PATH" 2>/dev/null | tail -1 | awk '{print $2}')
             echo "report_zip=$ZIP_PATH" >> $GITHUB_OUTPUT
+            echo "report_zip_bytes=$ZIP_BYTES" >> $GITHUB_OUTPUT
+            echo "report_zip_size=$ZIP_SIZE" >> $GITHUB_OUTPUT
+
+            # Gmail attachment limit is 25 MB. Use 24 MB (25165824 bytes) to leave
+            # headroom for MIME base64 encoding overhead (~33%). If the zip exceeds
+            # this, skip the email attachment and rely on the workflow artifact link.
+            EMAIL_LIMIT_BYTES=25165824
+            if [ "$ZIP_BYTES" -le "$EMAIL_LIMIT_BYTES" ]; then
+              echo "email_attachment=$ZIP_PATH" >> $GITHUB_OUTPUT
+              echo "report_too_large=false" >> $GITHUB_OUTPUT
+              ATTACH_NOTE="✅ ZIP within Gmail attachment limit — will attach to email"
+            else
+              echo "email_attachment=" >> $GITHUB_OUTPUT
+              echo "report_too_large=true" >> $GITHUB_OUTPUT
+              ATTACH_NOTE="⚠️  ZIP exceeds Gmail 25 MB attachment limit — will link to workflow artifact instead"
+            fi
+
             echo ""
             echo "✅ ZIP created:"
-            echo "   - Size: $ZIP_SIZE"
+            echo "   - Size: $ZIP_SIZE ($ZIP_BYTES bytes)"
             echo "   - Files in ZIP: $ZIP_CONTENTS"
+            echo "   - $ATTACH_NOTE"
             ls -lh "$ZIP_PATH"
           else
             echo "   ❌ Cannot create ZIP: report directory is empty!"
             echo "report_zip=" >> $GITHUB_OUTPUT
+            echo "email_attachment=" >> $GITHUB_OUTPUT
+            echo "report_too_large=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create GitHub Release with Report
-        id: release
+      - name: Upload Serenity Report ZIP as artifact
         if: always() && steps.report.outputs.report_zip != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ZIP_FILE="${{ steps.report.outputs.report_zip }}"
-          RELEASE_TAG="test-report-${{ matrix.env }}-$(date +%Y%m%d-%H%M%S)"
-          
-          echo "📦 Creating GitHub Release: $RELEASE_TAG"
-          echo "📎 Uploading: $ZIP_FILE"
-          
-          # Create release with the ZIP as an asset
-          RELEASE_URL=$(gh release create "$RELEASE_TAG" \
-            --repo="${{ github.repository }}" \
-            --title="Test Report [${{ matrix.env }}] - ${{ github.run_id }}" \
-            --notes="📊 Full Serenity test report for ${{ matrix.env }} environment. Run: ${{ github.run_id }}" \
-            "$ZIP_FILE" 2>&1 | grep -oP 'https://github\.com/[^\s]+/releases/tag/[^\s]+' || echo "")
-          
-          if [ -z "$RELEASE_URL" ]; then
-            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
-          fi
-          
-          DOWNLOAD_URL="$RELEASE_URL/download/$(basename $ZIP_FILE)"
-          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
-          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-          echo "✅ Release created: $RELEASE_URL"
-          echo "📥 Download link: $DOWNLOAD_URL"
-
-      - name: Email Test Reports
-        if: always() && steps.report.outputs.report_zip != ''
-        uses: dawidd6/action-send-mail@v3
+        uses: actions/upload-artifact@v4
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.GMAIL_USERNAME }}
-          password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          subject: "Test Report [${{ matrix.env }}] — ${{ steps.run.outcome == 'failure' && 'FAILURES DETECTED ❌' || steps.run.outcome == 'success' && 'ALL PASSED ✅' || steps.run.outcome == 'skipped' && 'SKIPPED ⏭️' || 'ERROR ⚠️' }} — ${{ github.repository }}"
-          to: harinder.qa.88@gmail.com
-          from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
-          body: |
+          name: serenity-full-report-${{ matrix.env }}
+          path: ${{ steps.report.outputs.report_zip }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Prepare Email Content
+        if: always()
+        id: email-content
+        run: |
+          if [ -n "${{ steps.report.outputs.report_zip }}" ]; then
+            if [ "${{ steps.run.outcome }}" = "failure" ]; then
+              EMAIL_STATUS="FAILURES DETECTED ❌"
+            elif [ "${{ steps.run.outcome }}" = "success" ]; then
+              EMAIL_STATUS="ALL PASSED ✅"
+            elif [ "${{ steps.run.outcome }}" = "skipped" ]; then
+              EMAIL_STATUS="SKIPPED ⏭️"
+            else
+              EMAIL_STATUS="ERROR ⚠️"
+            fi
+
+            ZIP_SIZE_LABEL="${{ steps.report.outputs.report_zip_size }}"
+            ARTIFACTS_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+
+            if [ "${{ steps.report.outputs.report_too_large }}" = "true" ]; then
+              REPORT_SECTION=$(cat <<RPT
+            📦 Serenity report (download from workflow artifacts)
+            ────────────────────────────────────────────────────
+            The full Serenity report (${ZIP_SIZE_LABEL}) exceeds Gmail's 25 MB
+            attachment limit, so it is published as a workflow artifact instead.
+
+            🔗 Download link:
+               ${ARTIFACTS_URL}
+
+               (Sign in to GitHub, scroll to the "Artifacts" section at the
+                bottom of the run page, and download "serenity-full-report-${{ matrix.env }}".)
+            RPT
+            )
+            else
+              REPORT_SECTION=$(cat <<RPT
+            📎 Serenity report attached (ZIP, ${ZIP_SIZE_LABEL})
+            ──────────────────────────────────────────────────
+            The full Serenity report folder is attached to this email as a ZIP archive.
+            RPT
+            )
+            fi
+
+            cat <<EOF >> "$GITHUB_OUTPUT"
+            email_subject=Test Report [${{ matrix.env }}] — ${EMAIL_STATUS} — ${{ github.repository }}
+            email_body<<__EMAIL__
             Hi,
 
             The daily test run has completed.
@@ -437,12 +469,14 @@ jobs:
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            📁 Full Serenity Report (Available for Download)
-            ─────────────────────────────────────────────────
-            ✅ Your test report has been uploaded to GitHub Releases (no virus warnings!)
+            ${REPORT_SECTION}
 
-            📥 Download the full report here:
-            ${{ steps.release.outputs.download_url }}
+            🔧 How to open it (IMPORTANT — must be extracted first):
+              1. Download the .zip file.
+              2. Right-click the .zip → "Extract All..." (Windows) or double-click on macOS.
+                 ⚠️  Do NOT open index.html from inside the zip viewer — it will look broken.
+              3. Open the extracted folder.
+              4. Double-click index.html to open it in Chrome or Edge.
 
             📋 What's included in the report:
               • All test scenarios with pass/fail details and statistics
@@ -451,36 +485,25 @@ jobs:
               • Full test execution timeline and summary
               • Click through each scenario for detailed step logs
 
-            🔧 How to use:
-              1. Click the download link above
-              2. Extract the ZIP file
-              3. Open index.html in your browser
-              4. View the complete interactive test report
-
             — Self-Healing Test Framework
-          attachments: ""
-
-      - name: Email Failed - No Report
-        if: always() && steps.report.outputs.report_zip == ''
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.GMAIL_USERNAME }}
-          password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          subject: "Test Report [${{ matrix.env }}] — ⚠️ NO REPORT GENERATED — ${{ github.repository }}"
-          to: harinder.qa.88@gmail.com
-          from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
-          body: |
+            __EMAIL__
+            EOF
+          else
+            cat <<EOF >> "$GITHUB_OUTPUT"
+            email_subject=Test Report [${{ matrix.env }}] — ⚠️ NO REPORT GENERATED — ${{ github.repository }}
+            email_body<<__EMAIL__
             Hi,
 
-            ⚠️ Test run completed but NO Serenity report was generated.
+            The daily test run has completed.
 
+            📊 Test Summary
+            ───────────────
             Environment: ${{ matrix.env }}
             Status: ${{ steps.run.outcome }}
             Repository: ${{ github.repository }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ⚠️ No Serenity report was generated for this run.
 
             This could indicate:
               • Maven build failed before generating reports
@@ -490,6 +513,24 @@ jobs:
             Check the GitHub Actions log for details.
 
             — Self-Healing Test Framework
+            __EMAIL__
+            EOF
+          fi
+
+      - name: Email Test Result
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: ${{ steps.email-content.outputs.email_subject }}
+          to: harinder.qa.88@gmail.com
+          from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
+          body: ${{ steps.email-content.outputs.email_body }}
+          attachments: ${{ steps.report.outputs.email_attachment }}
 
   report-success:
     needs: run-tests
