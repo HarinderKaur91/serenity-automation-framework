@@ -189,7 +189,7 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_FAILED" -eq 0 ]; then
+                if [ "$PASS2_FAILED" -eq 0 ] && { [ "$PASS2_EXIT" -eq 0 ] || [ "$PASS2_SKIPPED" -gt 0 ]; }; then
                   echo "========================================================"
                   echo "✅ PASS 2: No persistent failures after rerun. No issue raised."
                   echo "========================================================"
@@ -225,7 +225,7 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_FAILED" -eq 0 ]; then
+                if [ "$PASS2_FAILED" -eq 0 ] && { [ "$PASS2_EXIT" -eq 0 ] || [ "$PASS2_SKIPPED" -gt 0 ]; }; then
                   echo "========================================================"
                   echo "✅ PASS 2: No persistent failures after rerun. No issue raised."
                   echo "========================================================"
@@ -248,7 +248,7 @@ jobs:
                 PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
-                if [ "$PASS2_FAILED" -eq 0 ]; then
+                if [ "$PASS2_FAILED" -eq 0 ] && { [ "$PASS2_EXIT" -eq 0 ] || [ "$PASS2_SKIPPED" -gt 0 ]; }; then
                   echo "✅ PASS 2 (fallback): No persistent failures after rerun. Likely flaky."
                 else
                   echo "❌ PASS 2 (fallback): Failures still present. Raising GitHub issue..."
