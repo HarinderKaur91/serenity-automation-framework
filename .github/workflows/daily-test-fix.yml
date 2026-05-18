@@ -33,6 +33,10 @@ on:
           - saucedemo
           - herokuapp
           - magento
+      initial_run_id:
+        description: 'Initial (failing) run ID — used by post-merge rerun to build a comparison report'
+        required: false
+        default: ''
   pull_request:
     types: [closed]
     branches: [master]
@@ -414,6 +418,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Download Initial Run Artifact (for post-merge comparison)
+        if: always() && github.event.inputs.initial_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          INITIAL_RUN_ID: ${{ github.event.inputs.initial_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p initial-reports
+          echo "📥 Downloading test-reports-${{ matrix.env }} from initial run $INITIAL_RUN_ID..."
+          if gh run download "$INITIAL_RUN_ID" \
+              --repo "${{ github.repository }}" \
+              --name "test-reports-${{ matrix.env }}" \
+              --dir initial-reports; then
+            echo "✅ Initial run artifact downloaded to initial-reports/"
+            find initial-reports -maxdepth 3 -type d | head -20
+          else
+            echo "⚠️ Could not download initial run artifact (id=$INITIAL_RUN_ID). Comparison report will be skipped."
+            rm -rf initial-reports
+          fi
+
       - name: Build Email Summary HTML
         if: always()
         id: summary
@@ -470,6 +495,58 @@ jobs:
           echo "attachments=$ATTACHMENTS" >> $GITHUB_OUTPUT
           echo "Final email attachments: $ATTACHMENTS"
 
+      - name: Build Initial-vs-Current Comparison Report
+        if: always() && github.event.inputs.initial_run_id != ''
+        id: comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Find the initial run's failsafe-reports directory inside the
+          # downloaded artifact. The PASS 1 snapshot is preferred; fall back
+          # to target/failsafe-reports if that snapshot is absent.
+          INITIAL_FAILSAFE=""
+          if [ -d "initial-reports" ]; then
+            for candidate in \
+              "initial-reports/pass1-reports/failsafe-reports" \
+              "initial-reports/target/failsafe-reports"; do
+              if [ -d "$candidate" ] && ls "$candidate"/TEST-*.xml >/dev/null 2>&1; then
+                INITIAL_FAILSAFE="$candidate"; break
+              fi
+            done
+          fi
+
+          # Current run's failsafe (post-merge full re-run output)
+          if [ -d "target/failsafe-reports" ]; then
+            CURRENT_FAILSAFE="target/failsafe-reports"
+          elif [ -d "pass1-reports/failsafe-reports" ]; then
+            CURRENT_FAILSAFE="pass1-reports/failsafe-reports"
+          else
+            CURRENT_FAILSAFE=""
+          fi
+
+          if [ -z "$INITIAL_FAILSAFE" ] || [ -z "$CURRENT_FAILSAFE" ]; then
+            echo "⚠️ Skipping comparison report — initial=$INITIAL_FAILSAFE current=$CURRENT_FAILSAFE"
+            echo "comparison_html=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          OUT="comparison-initial-vs-postmerge-${{ matrix.env }}.html"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          python3 .github/scripts/build_comparison_report.py \
+            "$INITIAL_FAILSAFE" "$CURRENT_FAILSAFE" "$OUT" "$RUN_URL" "${{ matrix.env }}"
+          ls -lh "$OUT"
+          echo "comparison_html=$OUT" >> $GITHUB_OUTPUT
+
+          # Append to email attachment list (read existing value back from output file)
+          PREV="${{ steps.summary.outputs.attachments }}"
+          if [ -n "$PREV" ]; then
+            COMBINED="$PREV,$OUT"
+          else
+            COMBINED="$OUT"
+          fi
+          echo "attachments_combined=$COMBINED" >> $GITHUB_OUTPUT
+          echo "Email attachments (with comparison): $COMBINED"
+
       - name: Prepare Email Content
         if: always()
         id: email-content
@@ -482,6 +559,8 @@ jobs:
           REPORT_ZIP: ${{ steps.report.outputs.report_zip }}
           REPORT_ZIP_SIZE: ${{ steps.report.outputs.report_zip_size }}
           REPORT_TOO_LARGE: ${{ steps.report.outputs.report_too_large }}
+          COMPARISON_HTML: ${{ steps.comparison.outputs.comparison_html }}
+          RERUN_COUNT: ${{ github.event.inputs.rerun_count }}
         shell: bash
         run: |
           set -euo pipefail
@@ -495,6 +574,16 @@ jobs:
             esac
 
             ARTIFACTS_URL="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}#artifacts"
+
+            COMPARISON_SECTION=""
+            if [ -n "${COMPARISON_HTML:-}" ]; then
+              COMPARISON_SECTION=$(printf '%s\n' \
+                "" \
+                "🔍 Initial vs Post-Merge comparison attached (open ${COMPARISON_HTML})" \
+                "───────────────────────────────────────────────────────────────────" \
+                "Shows fixed / still-failing / newly-failing scenarios between the" \
+                "initial failing run and this post-PR-merge full-suite re-run.")
+            fi
 
             REPORT_SECTION=$(printf '%s\n' \
               "📊 Summary attached (open serenity-summary-${MATRIX_ENV}.html)" \
@@ -519,7 +608,16 @@ jobs:
               "   bottom of the run page, and download \"serenity-full-report-${MATRIX_ENV}\"." \
               "   Extract the ZIP first, then double-click index.html.")
 
-            EMAIL_SUBJECT="Test Report [${MATRIX_ENV}] — ${EMAIL_STATUS} — ${REPO}"
+            if [ -n "${COMPARISON_SECTION}" ]; then
+              REPORT_SECTION=$(printf '%s\n%s' "${REPORT_SECTION}" "${COMPARISON_SECTION}")
+            fi
+
+            RUN_LABEL="Daily run"
+            if [ -n "${RERUN_COUNT:-}" ] && [ "${RERUN_COUNT}" != "0" ] && [ "${RERUN_COUNT}" != "1" ]; then
+              RUN_LABEL="Post-PR-merge full re-run (rerun ${RERUN_COUNT})"
+            fi
+
+            EMAIL_SUBJECT="Test Report [${MATRIX_ENV}] — ${EMAIL_STATUS} — ${RUN_LABEL} — ${REPO}"
 
             EMAIL_BODY=$(printf '%s\n' \
               "Hi," \
@@ -583,7 +681,7 @@ jobs:
           to: harinder.qa.88@gmail.com
           from: Self-Healing Framework <${{ secrets.GMAIL_USERNAME }}>
           body: ${{ steps.email-content.outputs.email_body }}
-          attachments: ${{ steps.summary.outputs.attachments }}
+          attachments: ${{ steps.comparison.outputs.attachments_combined != '' && steps.comparison.outputs.attachments_combined || steps.summary.outputs.attachments }}
 
   report-success:
     needs: run-tests
@@ -724,12 +822,20 @@ jobs:
               return out;
             }
 
+            const rerunCount = `${{ github.event.inputs.rerun_count || '' }}`;
+            const isPostMerge = rerunCount !== '' && rerunCount !== '0' && rerunCount !== '1';
+
             let body = `## Automated Test Failure\n\n`;
             body += `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n`;
             body += `**Environment:** ${{ github.event.inputs.env || 'qa' }}\n`;
             body += `**Site filter:** ${{ github.event.inputs.site || 'all' }}\n\n`;
-            body += `<!-- PASS1_CONFIG env=${{ github.event.inputs.env || 'qa' }} site=${{ github.event.inputs.site || 'all' }} -->\n\n`;
-            body += `> ⚠️ **These are PASS 2 (post-rerun) failures only** — scenarios that failed in the initial run AND still failed after the automatic selective rerun. Flaky scenarios that passed on rerun are excluded.\n\n`;
+            body += `<!-- PASS1_CONFIG env=${{ github.event.inputs.env || 'qa' }} site=${{ github.event.inputs.site || 'all' }} -->\n`;
+            body += `<!-- PASS1_RUN_ID id=${context.runId} -->\n\n`;
+            if (isPostMerge) {
+              body += `> ⚠️ **These are post-PR-merge full-suite failures** — the Copilot fix was merged into master and the full test suite (respecting the original site filter) was re-run. The scenarios below STILL fail after that fix, so manual investigation is required.\n\n`;
+            } else {
+              body += `> ⚠️ **These are PASS 2 (post-rerun) failures only** — scenarios that failed in the initial run AND still failed after the automatic selective rerun. Flaky scenarios that passed on rerun are excluded.\n\n`;
+            }
             body += `Analyze the failures below, identify the root cause, fix the source code, and open a PR.\n\n`;
 
             const allFiles = walk('artifacts');

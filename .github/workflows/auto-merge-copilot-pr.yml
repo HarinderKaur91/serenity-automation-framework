@@ -165,6 +165,11 @@ jobs:
                   if (envMatch?.[1]) envName = envMatch[1].trim();
                   if (siteMatch?.[1]) siteName = siteMatch[1].trim();
                 }
+                const runIdMatch = issueBody.match(/<!--\s*PASS1_RUN_ID\s+id=(\d+)\s*-->/i);
+                if (runIdMatch) {
+                  core.setOutput('initial_run_id', runIdMatch[1]);
+                  console.log(`Resolved PASS 1 run id: ${runIdMatch[1]}`);
+                }
               } catch (e) {
                 core.warning(`Could not resolve PASS 1 config from linked issue: ${e.message}`);
               }
@@ -181,6 +186,7 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           VERIFY_ENV="${{ steps.rerun-config.outputs.env }}"
           VERIFY_SITE="${{ steps.rerun-config.outputs.site }}"
+          INITIAL_RUN_ID="${{ steps.rerun-config.outputs.initial_run_id }}"
           echo "========================================================"
           echo "✅ Copilot PR #$PR_NUMBER merged successfully"
           echo "========================================================"
@@ -190,6 +196,7 @@ jobs:
           echo "   rerun_count: 2"
           echo "   env: $VERIFY_ENV"
           echo "   site: $VERIFY_SITE"
+          echo "   initial_run_id: $INITIAL_RUN_ID"
           echo ""
 
           curl -X POST \
@@ -201,7 +208,8 @@ jobs:
               "inputs":{
                 "rerun_count":"2",
                 "env":"'"$VERIFY_ENV"'",
-                "site":"'"$VERIFY_SITE"'"
+                "site":"'"$VERIFY_SITE"'",
+                "initial_run_id":"'"$INITIAL_RUN_ID"'"
               }
             }' \
             && echo "✅ Verification rerun dispatched successfully" \
