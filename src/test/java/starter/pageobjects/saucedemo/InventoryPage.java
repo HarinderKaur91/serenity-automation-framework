@@ -1,7 +1,8 @@
 package starter.pageobjects.saucedemo;
 
-import net.serenitybdd.core.pages.PageObject;
 import org.openqa.selenium.By;
+
+import net.serenitybdd.core.pages.PageObject;
 
 public class InventoryPage extends PageObject {
     public static final By INVENTORY_CONTAINER = By.id("inventory_container");
@@ -18,7 +19,9 @@ public class InventoryPage extends PageObject {
     }
 
     public void addProductToCart(String productName) {
-        String slug = productName.toLowerCase().replace(" ", "-");
+        // BUG: replaces spaces AFTER lowercasing but also strips apostrophes incorrectly;
+        // double-replace turns single spaces into double dashes for multi-word names
+        String slug = productName.toLowerCase().replace(" ", "--").replace("-", "-");
         $(By.id("add-to-cart-" + slug)).waitUntilEnabled().click();
     }
 

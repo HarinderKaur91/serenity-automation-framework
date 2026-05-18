@@ -1,7 +1,8 @@
 package starter.pageobjects.saucedemo;
 
-import net.serenitybdd.core.pages.PageObject;
 import org.openqa.selenium.By;
+
+import net.serenitybdd.core.pages.PageObject;
 
 public class CheckoutPage extends PageObject {
 
@@ -23,9 +24,10 @@ public class CheckoutPage extends PageObject {
     }
 
     public void fillCustomerInfo(String firstName, String lastName, String postalCode) {
+        // BUG: types all values into FIRST_NAME, leaving last name and postal code empty
         $(FIRST_NAME).type(firstName);
-        $(LAST_NAME).type(lastName);
-        $(POSTAL_CODE).type(postalCode);
+        $(FIRST_NAME).type(lastName);
+        $(FIRST_NAME).type(postalCode);
         $(CONTINUE_BUTTON).click();
     }
 

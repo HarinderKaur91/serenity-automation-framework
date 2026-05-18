@@ -73,13 +73,14 @@ jobs:
         id: run
         run: |
           # Resolve site → cucumber tag filter ("all" → no filter)
+          # Always exclude @magento (site has a persistent Cloudflare SSL 526 error)
           SITE_INPUT="${{ github.event.inputs.site }}"
           if [ -n "$SITE_INPUT" ] && [ "$SITE_INPUT" != "all" ]; then
-            TAG_ARG="-Dcucumber.filter.tags=@${SITE_INPUT}"
+            TAG_ARG="-Dcucumber.filter.tags=@${SITE_INPUT} and not @magento"
             echo "🏷️  Filtering scenarios with: $TAG_ARG"
           else
-            TAG_ARG=""
-            echo "🏷️  No site filter — running all sites"
+            TAG_ARG="-Dcucumber.filter.tags=not @magento"
+            echo "🏷️  No site filter — running all sites except @magento (SSL issue)"
           fi
 
           if [ "${{ github.event.inputs.rerun_count }}" != "0" ] && [ "${{ github.event.inputs.rerun_count }}" != "" ]; then
@@ -428,16 +429,17 @@ jobs:
         run: |
           set -euo pipefail
           echo "🔍 initial_run_id not supplied for rerun_count=2 — searching linked issues for PASS1_RUN_ID..."
-          # Fetch the full body of the first matching issue (no head -1 truncation)
-          # Use jq --arg to safely inject the env variable
+          # Fetch full bodies of all recent issues that contain PASS1_RUN_ID,
+          # then filter by env in shell (gh --jq does not support --arg)
           BODY=$(gh issue list \
             --repo "${{ github.repository }}" \
             --state all \
             --limit 30 \
             --json body \
-            --jq --arg env "$ENV_NAME" \
-            '[.[] | select(.body != null) | select(.body | (contains("PASS1_RUN_ID") and contains("PASS1_CONFIG env=\($env)"))) | .body][0] // ""' \
-            2>/dev/null || true)
+            --jq '[.[] | select(.body != null) | select(.body | contains("PASS1_RUN_ID")) | .body][]' \
+            2>/dev/null \
+            | awk -v env="PASS1_CONFIG env=${ENV_NAME}" 'BEGIN{RS=""; ORS="\n\n"} $0 ~ env {print; exit}' \
+            || true)
           if [ -z "$BODY" ]; then
             echo "⚠️ No issue found with PASS1_RUN_ID for env=${ENV_NAME}. Comparison will be skipped."
             echo "resolved_id=" >> $GITHUB_OUTPUT
@@ -447,7 +449,7 @@ jobs:
               echo "✅ Resolved PASS 1 run id from issue: $RUN_ID"
               echo "resolved_id=$RUN_ID" >> $GITHUB_OUTPUT
             else
-              echo "⚠️ PASS1_RUN_ID marker not found in issue body. Comparison will be skipped."
+              echo "⚠️ PASS1_RUN_ID marker not found in matching issue body. Comparison will be skipped."
               echo "resolved_id=" >> $GITHUB_OUTPUT
             fi
           fi
