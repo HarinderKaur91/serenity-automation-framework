@@ -18,7 +18,8 @@ public class MagentoHomePage extends PageObject {
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
     private static final By LOADING_MASK = By.cssSelector(".loading-mask");
     private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
-    private static final int MAX_SSL_ERROR_RETRIES = 3;
+    private static final int MAX_SSL_ERROR_RETRIES = 6;
+    private static final long CLOUDFLARE_RETRY_DELAY_MILLIS = 5000L;
     private String lastSearchTerm;
 
     public void searchFor(String term) {
@@ -41,6 +42,7 @@ public class MagentoHomePage extends PageObject {
 
     public java.util.List<String> getProductResults() {
         return withCloudflareRetry(() -> {
+            ensureNotOnCloudflareErrorPage();
             $(PRODUCT_RESULTS).waitUntilVisible();
             java.util.List<WebElementFacade> elements = findAll(PRODUCT_RESULTS);
             if (elements == null) return java.util.Collections.emptyList();
@@ -53,6 +55,7 @@ public class MagentoHomePage extends PageObject {
 
     public void openFirstProduct() {
         withCloudflareRetry(() -> {
+            ensureNotOnCloudflareErrorPage();
             $(PRODUCT_RESULTS).waitUntilVisible();
             findAll(PRODUCT_RESULTS).get(0).click();
             return null;
@@ -61,6 +64,7 @@ public class MagentoHomePage extends PageObject {
 
     public String getPageTitleText() {
         return withCloudflareRetry(() -> {
+            ensureNotOnCloudflareErrorPage();
             $(PAGE_TITLE).waitUntilVisible();
             String title = getDriver().getTitle();
             return title == null ? "" : title;
@@ -77,20 +81,39 @@ public class MagentoHomePage extends PageObject {
                 if (!isCloudflareSslErrorPage() || lastSearchTerm == null || attempt == MAX_SSL_ERROR_RETRIES) {
                     throw e;
                 }
+                waitBeforeRetry();
                 searchFor(lastSearchTerm);
             }
         }
         throw lastException;
     }
 
+    private void ensureNotOnCloudflareErrorPage() {
+        if (isCloudflareSslErrorPage()) {
+            throw new TimeoutException("Cloudflare SSL error page detected");
+        }
+    }
+
+    private void waitBeforeRetry() {
+        try {
+            Thread.sleep(CLOUDFLARE_RETRY_DELAY_MILLIS);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private boolean isCloudflareSslErrorPage() {
-        String title = getDriver().getTitle();
-        if (title != null && title.contains("526: Invalid SSL certificate")) {
+        return isCloudflareSslErrorPage(getDriver().getTitle(), getDriver().getPageSource());
+    }
+
+    static boolean isCloudflareSslErrorPage(String title, String pageSource) {
+        if (title != null && (title.contains("526: Invalid SSL certificate") || title.contains("Error code 526"))) {
             return true;
         }
-        String pageSource = getDriver().getPageSource();
         return pageSource != null
-                && pageSource.contains("Error code 526")
-                && pageSource.contains("cf-error-details");
+                && pageSource.contains("cf-error-details")
+                && (pageSource.contains("Error code 526")
+                || pageSource.contains("Invalid SSL certificate")
+                || pageSource.contains("Cloudflare"));
     }
 }
