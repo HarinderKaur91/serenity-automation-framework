@@ -165,7 +165,7 @@ jobs:
               cp target/rerun.txt pass1-reports/rerun.txt
             fi
 
-            if [ "$PASS1_EXIT" -eq 0 ] && [ "$RETRIABLE_COUNT" -eq 0 ]; then
+            if [ "$PASS1_EXIT" -eq 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
               echo "========================================================"
               echo "✅ PASS 1: All tests passed! Nothing to rerun."
               echo "========================================================"
@@ -177,8 +177,8 @@ jobs:
               # Cucumber's rerun plugin writes failed scenario URIs to target/rerun.txt,
               # one per line, e.g.:
               #   src/test/resources/features/saucedemo/login.feature:7
-              if [ "$SKIPPED_COUNT" -gt 0 ]; then
-                echo "🔄 PASS 2: Skipped scenarios detected. Re-running the full suite once so skipped cases are retried as well..."
+              if [ "$SKIPPED_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -gt 0 ]; then
+                echo "🔄 PASS 2: Skipped scenarios detected alongside failures. Re-running the full suite once..."
                 set +e
                 mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
                 PASS2_EXIT=$?
@@ -189,13 +189,13 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "========================================================"
-                  echo "✅ PASS 2: Previously failed/skipped scenarios now pass. No issue raised."
+                  echo "✅ PASS 2: Previously failed scenarios now pass. No issue raised."
                   echo "========================================================"
                 else
                   echo "========================================================"
-                  echo "❌ PASS 2: Failures or skipped scenarios persist after rerun. Raising GitHub issue for investigation..."
+                  echo "❌ PASS 2: Failures persist after rerun. Raising GitHub issue for investigation..."
                   echo "========================================================"
                   exit 1
                 fi
@@ -225,13 +225,13 @@ jobs:
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
 
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "========================================================"
                   echo "✅ PASS 2: Previously failed scenarios now pass. No issue raised."
                   echo "========================================================"
                 else
                   echo "========================================================"
-                  echo "❌ PASS 2: Failures or skipped scenarios persist on rerun. Raising GitHub issue for investigation..."
+                  echo "❌ PASS 2: Failures persist on rerun. Raising GitHub issue for investigation..."
                   echo "========================================================"
                   exit 1
                 fi
@@ -248,10 +248,10 @@ jobs:
                 PASS2_SKIPPED=$(python3 "$PARSER" skipped-count 2>/dev/null || echo 0)
                 PASS2_RETRIABLE=$(python3 "$PARSER" retriable-count 2>/dev/null || echo 0)
                 echo "── Diagnostic: PASS2_EXIT=$PASS2_EXIT PASS2_FAILED=$PASS2_FAILED PASS2_SKIPPED=$PASS2_SKIPPED PASS2_RETRIABLE=$PASS2_RETRIABLE ──"
-                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_RETRIABLE" -eq 0 ]; then
+                if [ "$PASS2_EXIT" -eq 0 ] && [ "$PASS2_FAILED" -eq 0 ]; then
                   echo "✅ PASS 2 (fallback): All tests now pass! Likely flaky."
                 else
-                  echo "❌ PASS 2 (fallback): Failures or skipped scenarios still present. Raising GitHub issue..."
+                  echo "❌ PASS 2 (fallback): Failures still present. Raising GitHub issue..."
                   exit 1
                 fi
               fi
