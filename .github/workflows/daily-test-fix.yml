@@ -73,14 +73,20 @@ jobs:
         id: run
         run: |
           # Resolve site → cucumber tag filter ("all" → no filter)
-          # Always exclude @magento (site has a persistent Cloudflare SSL 526 error)
           SITE_INPUT="${{ github.event.inputs.site }}"
           if [ -n "$SITE_INPUT" ] && [ "$SITE_INPUT" != "all" ]; then
-            TAG_ARG="-Dcucumber.filter.tags=@${SITE_INPUT} and not @magento"
-            echo "🏷️  Filtering scenarios with: $TAG_ARG"
+            TAGS_EXPR="@${SITE_INPUT}"
+            echo "🏷️  Filtering scenarios with: $TAGS_EXPR"
           else
-            TAG_ARG="-Dcucumber.filter.tags=not @magento"
-            echo "🏷️  No site filter — running all sites except @magento (SSL issue)"
+            TAGS_EXPR=""
+            echo "🏷️  No site filter — running all scenarios"
+          fi
+
+          # Build optional tag filter arg — only set when a specific site is chosen
+          if [ -n "$TAGS_EXPR" ]; then
+            TAG_FILTER="-Dcucumber.filter.tags=${TAGS_EXPR}"
+          else
+            TAG_FILTER=""
           fi
 
           if [ "${{ github.event.inputs.rerun_count }}" != "0" ] && [ "${{ github.event.inputs.rerun_count }}" != "" ]; then
@@ -88,14 +94,14 @@ jobs:
             echo "========================================================"
             echo "🔄 RERUN POST MERGE ${{ github.event.inputs.rerun_count }}: Re-running full suite to verify the Copilot fix..."
             echo "========================================================"
-            mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
+            mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_FILTER
           else
             # ── INITIAL SCHEDULED / FIRST RUN ───────────────────────────────────
             echo "========================================================"
             echo "🚀 PASS 1: Running full test suite..."
             echo "========================================================"
             set +e
-            mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
+            mvn clean verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_FILTER
             PASS1_EXIT=$?
             set -e
 
@@ -185,7 +191,7 @@ jobs:
               if [ "$SKIPPED_COUNT" -gt 0 ]; then
                 echo "🔄 PASS 2: Skipped scenarios detected. Re-running the full suite once so skipped cases are retried as well..."
                 set +e
-                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_FILTER
                 PASS2_EXIT=$?
                 set -e
 
@@ -246,7 +252,7 @@ jobs:
                 echo "🔄 PASS 2 (fallback): Re-running full suite once before raising issue..."
                 echo "========================================================"
                 set +e
-                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_ARG
+                mvn verify -Denv=${{ matrix.env }} -Dheadless.mode=true $TAG_FILTER
                 PASS2_EXIT=$?
                 set -e
                 PASS2_FAILED=$(python3 "$PARSER" count 2>/dev/null || echo 0)
