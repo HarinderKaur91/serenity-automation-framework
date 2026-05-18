@@ -764,21 +764,46 @@ jobs:
             
             const failures = []; // { scenario, classname, message, type, stack, location }
 
+            // Order-independent attribute extractor.
+            function attr(tag, name) {
+              const re = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`);
+              const m = tag.match(re);
+              return m ? m[1] : '';
+            }
+
             for (const xml of xmlFiles) {
               const content = fs.readFileSync(xml, 'utf8');
-              const caseRegex = /<testcase\b[^>]*\bname="([^"]+)"[^>]*\bclassname="([^"]+)"[^>]*>([\s\S]*?)<\/testcase>/g;
+              // Match each <testcase ...>...</testcase> AND self-closing <testcase .../> .
+              const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
               let m;
               while ((m = caseRegex.exec(content)) !== null) {
-                const [, name, classname, inner] = m;
-                const failMatch = inner.match(/<(failure|error)\b[^>]*\bmessage="([^"]*)"[^>]*\btype="([^"]*)"[^>]*>([\s\S]*?)<\/\1>/);
+                const tagAttrs = m[1];
+                const inner = m[3] || '';
+                const name = attr(tagAttrs, 'name');
+                const classname = attr(tagAttrs, 'classname');
+                if (!name) continue;
+
+                // Find <failure>/<error>; tolerate self-closing tags and any attribute order.
+                const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
+                const failMatch = inner.match(failBlockRe);
                 if (!failMatch) continue;
-                const [, , message, type, stackRaw] = failMatch;
+                const failAttrs = failMatch[2];
+                const stackRaw = failMatch[4] || '';
+                const message = attr(failAttrs, 'message');
+                const type = attr(failAttrs, 'type');
                 const stack = stackRaw
                   .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
                   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
                   .trim();
                 failures.push({ scenario: name, classname, message, type, stack });
               }
+            }
+            console.log(`Parsed ${failures.length} <failure>/<error> entries from PASS 2 XML files.`);
+
+            // If PASS 2 produced no failures, the rerun passed — nothing to escalate.
+            if (failures.length === 0) {
+              console.log('✅ PASS 2 yielded zero failures — skipping issue creation.');
+              return;
             }
 
             // ── Dedupe failures by scenario+classname ────────────────────────
@@ -1031,18 +1056,39 @@ jobs:
             }
             const allFiles = walk('artifacts');
             const reportFiles = allFiles.filter(f => f.endsWith('.txt') || f.endsWith('.xml'));
-            // Exclude Serenity report asset icons (android-icon-*, favicon-*, etc.)
-            // and only keep actual test failure screenshots from the screenshots/ folder
-            const screenshots = allFiles.filter(f => {
+
+            // ── Screenshot discovery ────────────────────────────────────────
+            // Serenity stores screenshots as hash-named PNG files directly in
+            // target/site/serenity/ (no 'screenshots' subfolder). The per-scenario
+            // JSON sibling files list which screenshots belong to a FAILED scenario.
+            // We prefer those; if none can be linked, we fall back to all hash-named
+            // PNGs in serenity/ (excluding app-icon assets).
+            const isHashPng = (f) => {
               const base = path.basename(f);
-              return /\.(png|jpe?g)$/i.test(f)
-                && !base.startsWith('thumbnail_')
-                && !base.startsWith('android-icon-')
-                && !base.startsWith('favicon-')
-                && !base.startsWith('apple-icon-')
-                && f.includes('screenshots');
-            }).slice(0, 5); // cap at 5 to avoid huge JIRA tickets
-            console.log(`Screenshots found: ${screenshots.length} — ${screenshots.map(f => path.basename(f)).join(', ')}`);
+              return /^[0-9a-f]{32,}\.(png|jpe?g)$/i.test(base);
+            };
+            const allSerenityPngs = allFiles.filter(f =>
+              /[\/\\](site[\/\\])?serenity[\/\\]/.test(f) && isHashPng(f)
+            );
+
+            // Try to pick only screenshots belonging to FAILED scenarios via JSON sidecars
+            const serenityJsons = allFiles.filter(f =>
+              /[\/\\](site[\/\\])?serenity[\/\\][0-9a-f]{32,}\.json$/i.test(f)
+            );
+            const failureShotNames = new Set();
+            for (const jf of serenityJsons) {
+              try {
+                const txt = fs.readFileSync(jf, 'utf8');
+                if (!/"result"\s*:\s*"(FAILURE|ERROR|COMPROMISED)"/i.test(txt)) continue;
+                const shotRe = /"screenshot"\s*:\s*"([^"]+\.(?:png|jpe?g))"/gi;
+                let sm;
+                while ((sm = shotRe.exec(txt)) !== null) failureShotNames.add(path.basename(sm[1]));
+              } catch (_) { /* ignore */ }
+            }
+            let screenshots = allSerenityPngs.filter(f => failureShotNames.has(path.basename(f)));
+            if (screenshots.length === 0) screenshots = allSerenityPngs;
+            screenshots = screenshots.slice(0, 10);
+            console.log(`Screenshots found: ${screenshots.length} (failure-linked: ${failureShotNames.size}) — ${screenshots.map(f => path.basename(f)).join(', ')}`);
 
             // ── Extract failed scenarios from rerun.txt or failsafe XML ─────
             let failedScenarios = [];
@@ -1053,22 +1099,34 @@ jobs:
             }
 
             // ── Extract actual Gherkin steps from failures ──────────────────
-            // Parse failsafe XML to get failure details + stack with Gherkin steps
-            const xmlFiles = allFiles.filter(f => 
-              f.includes('failsafe-reports') && 
-              !f.includes('pass1-reports') && 
+            // Parse failsafe XML — attribute order independent, tolerates self-closing tags.
+            const xmlFiles = allFiles.filter(f =>
+              f.includes('failsafe-reports') &&
+              !f.includes('pass1-reports') &&
               /TEST-.*\.xml$/.test(f)
             );
+            function attr(tag, name) {
+              const re = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`);
+              const m = tag.match(re); return m ? m[1] : '';
+            }
             const failures = [];
             for (const xml of xmlFiles) {
               const content = fs.readFileSync(xml, 'utf8');
-              const caseRegex = /<testcase\b[^>]*\bname="([^"]+)"[^>]*\bclassname="([^"]+)"[^>]*>([\s\S]*?)<\/testcase>/g;
+              const caseRegex = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g;
               let m;
               while ((m = caseRegex.exec(content)) !== null) {
-                const [, name, classname, inner] = m;
-                const failMatch = inner.match(/<(failure|error)\b[^>]*\bmessage="([^"]*)"[^>]*\btype="([^"]*)"[^>]*>([\s\S]*?)<\/\1>/);
+                const tagAttrs = m[1];
+                const inner = m[3] || '';
+                const name = attr(tagAttrs, 'name');
+                const classname = attr(tagAttrs, 'classname');
+                if (!name) continue;
+                const failBlockRe = /<(failure|error)\b([^>]*?)(\/>|>([\s\S]*?)<\/\1>)/;
+                const failMatch = inner.match(failBlockRe);
                 if (!failMatch) continue;
-                const [, , message, type, stackRaw] = failMatch;
+                const failAttrs = failMatch[2];
+                const stackRaw = failMatch[4] || '';
+                const message = attr(failAttrs, 'message');
+                const type = attr(failAttrs, 'type');
                 const stack = stackRaw
                   .replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '')
                   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
@@ -1076,6 +1134,7 @@ jobs:
                 failures.push({ scenario: name, classname, message, type, stack });
               }
             }
+            console.log(`Parsed ${failures.length} <failure>/<error> entries from PASS 2 XML.`);
 
             // Dedupe by scenario+classname
             const seen = new Set();
@@ -1089,19 +1148,73 @@ jobs:
             failures.length = 0;
             failures.push(...uniqueFailures);
 
-            // ── Extract failure messages ─────────────────────────────────────
-            let failureBlock = '';
-            for (const file of reportFiles.slice(0, 5)) {
-              const content = fs.readFileSync(file, 'utf8').slice(0, 1500);
-              if (content.includes('FAILURE') || content.includes('ERROR') || content.includes('<failure')) {
-                failureBlock += `\n--- ${path.basename(file)} ---\n${content}\n`;
+            // ── Pair each failure with its source feature file + line ──────
+            // Stack frames look like: at ✽.Given I open the page (file:features/X/y.feature:5)
+            // or:                     at features.X.y.feature:5
+            for (const f of failures) {
+              const lines = f.stack.split('\n');
+              let featurePath = '', featureLine = '';
+              for (const ln of lines) {
+                const mm = ln.match(/(?:file:)?((?:src[\/\\]test[\/\\]resources[\/\\])?features[\/\\][^:\s)]+\.feature):(\d+)/);
+                if (mm) { featurePath = mm[1].replace(/^src[\/\\]test[\/\\]resources[\/\\]/, ''); featureLine = mm[2]; break; }
               }
+              f.featurePath = featurePath;
+              f.featureLine = featureLine;
             }
 
+            // ── Read each failed scenario's full Gherkin steps from .feature ─
+            function readScenarioSteps(featureRel, lineNum) {
+              if (!featureRel) return [];
+              const candidates = [
+                path.join('src', 'test', 'resources', featureRel),
+                featureRel,
+                path.join('src', 'test', 'resources', featureRel.replace(/^features[\/\\]/, 'features/')),
+              ];
+              let abs = candidates.find(p => fs.existsSync(p));
+              if (!abs) return [];
+              const all = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
+              const target = lineNum ? parseInt(lineNum, 10) - 1 : -1;
+              // Find the Scenario block containing line `target`
+              let startIdx = -1, scenarioName = '';
+              for (let i = (target >= 0 ? target : all.length - 1); i >= 0; i--) {
+                const t = all[i].trim();
+                const sm = t.match(/^Scenario(?:\s+Outline)?:\s*(.+)$/);
+                if (sm) { startIdx = i; scenarioName = sm[1].trim(); break; }
+              }
+              if (startIdx < 0) return [];
+              const steps = [];
+              for (let i = startIdx + 1; i < all.length; i++) {
+                const raw = all[i];
+                const t = raw.trim();
+                if (!t) continue;
+                if (/^(Scenario(?:\s+Outline)?|Feature|Background|Examples|Rule):/i.test(t)) break;
+                if (/^@/.test(t)) break;
+                if (/^(Given|When|Then|And|But|\*)\b/i.test(t)) steps.push(t);
+              }
+              return steps;
+            }
+
+            // ── Build bug-style summary from first failure (or scenario list) ─
             const runUrl     = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const ghIssueUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}`;
             const env        = "${{ github.event.inputs.env || 'qa' }}";
             const site       = "${{ github.event.inputs.site || 'all' }}";
+
+            let bugSummary;
+            if (failures.length > 0) {
+              const f0 = failures[0];
+              const featureName = f0.featurePath
+                ? path.basename(f0.featurePath, '.feature').replace(/[_-]+/g, ' ')
+                : (f0.classname || 'unknown');
+              const extra = failures.length > 1 ? ` (+${failures.length - 1} more)` : '';
+              bugSummary = `Test Failure: ${featureName} — ${f0.scenario}${extra}`;
+            } else if (failedScenarios.length > 0) {
+              const first = failedScenarios[0].split(':')[0].split(/[\/\\]/).pop().replace(/\.feature$/, '');
+              const extra = failedScenarios.length > 1 ? ` (+${failedScenarios.length - 1} more)` : '';
+              bugSummary = `Test Failure: ${first}${extra}`;
+            } else {
+              bugSummary = `Test Failure: Automated regression suite — GitHub #${issueNumber}`;
+            }
 
             // ── Build Atlassian Document Format (ADF) description ────────────
             const heading = (text, level = 2) => ({ type: 'heading', attrs: { level }, content: [{ type: 'text', text }] });
@@ -1110,10 +1223,65 @@ jobs:
             const link    = (text, href)      => ({ type: 'paragraph', content: [{ type: 'text', text, marks: [{ type: 'link', attrs: { href } }] }] });
             const bullets = (items)           => ({ type: 'bulletList', content: items.map(t => ({ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: t }] }] })) });
 
-            const adfContent = [
-              heading('Summary'),
-              para(`Automated test failure could not be auto-fixed by Copilot agent after ${rerunCount} retries. Manual investigation required.`),
+            // ── Build "Steps to Reproduce" covering ALL failed scenarios ─────
+            const stepsContent = [];
+            stepsContent.push(para(`1. Clone repository and checkout master branch.`));
+            const mvnCmd = `2. Run: mvn clean verify -Denv=${env}` + (site && site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : '');
+            stepsContent.push(para(mvnCmd));
+            stepsContent.push(para(`3. Reproduce the following failed scenario(s):`));
 
+            if (failures.length > 0) {
+              for (let i = 0; i < failures.length; i++) {
+                const f = failures[i];
+                const featLabel = f.featurePath ? `${f.featurePath}${f.featureLine ? ':' + f.featureLine : ''}` : (f.classname || '');
+                stepsContent.push(heading(`${i + 1}. ${f.scenario}`, 3));
+                if (featLabel) stepsContent.push(para(`Feature: ${featLabel}`));
+                const gherkin = readScenarioSteps(f.featurePath, f.featureLine);
+                if (gherkin.length > 0) {
+                  stepsContent.push(bullets(gherkin));
+                } else {
+                  // Fallback: extract step lines from the stack trace
+                  const stackSteps = f.stack.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => /[✽✓✗]\..+\(file:/.test(l))
+                    .map(l => {
+                      const mm = l.match(/[✽✓✗]\.(.+?)\s*\(file:/);
+                      return mm ? mm[1].trim() : l;
+                    });
+                  stepsContent.push(stackSteps.length ? bullets(stackSteps) : para('(Gherkin steps unavailable — see Failure Details below.)'));
+                }
+              }
+            } else if (failedScenarios.length > 0) {
+              for (let i = 0; i < failedScenarios.length; i++) {
+                const loc = failedScenarios[i];
+                const mm = loc.match(/^(.+\.feature):(\d+)$/);
+                const featPath = mm ? mm[1] : loc;
+                const featLine = mm ? mm[2] : '';
+                stepsContent.push(heading(`${i + 1}. ${path.basename(featPath)}${featLine ? ':' + featLine : ''}`, 3));
+                const gherkin = readScenarioSteps(featPath.replace(/^.*?(features[\/\\])/, '$1'), featLine);
+                stepsContent.push(gherkin.length ? bullets(gherkin) : para(`Location: ${loc}`));
+              }
+            } else {
+              stepsContent.push(para('No failed scenarios could be enumerated — see Failure Details below.'));
+            }
+
+            // ── Failure Details: per-scenario message + trimmed stack ────────
+            const failureDetails = [];
+            if (failures.length > 0) {
+              for (let i = 0; i < failures.length; i++) {
+                const f = failures[i];
+                failureDetails.push(heading(`${i + 1}. ${f.scenario}`, 3));
+                if (f.classname) failureDetails.push(para(`Class: ${f.classname}`));
+                if (f.type)      failureDetails.push(para(`Type: ${f.type}`));
+                if (f.message)   failureDetails.push(para(`Message: ${f.message}`));
+                const trimmedStack = f.stack.split('\n').slice(0, 30).join('\n').slice(0, 3500);
+                if (trimmedStack) failureDetails.push(code(trimmedStack));
+              }
+            } else {
+              failureDetails.push(para('See attached failsafe reports.'));
+            }
+
+            const adfContent = [
               heading('Environment'),
               bullets([
                 `Environment: ${env}`,
@@ -1124,35 +1292,15 @@ jobs:
               ]),
 
               heading('Failed Scenarios'),
-              failedScenarios.length
-                ? bullets(failedScenarios)
-                : para('Could not extract individual scenario list (see GitHub Actions log).'),
+              failures.length
+                ? bullets(failures.map(f => `${f.scenario}${f.featurePath ? ` — ${f.featurePath}${f.featureLine ? ':' + f.featureLine : ''}` : ''}`))
+                : (failedScenarios.length ? bullets(failedScenarios) : para('Could not extract individual scenario list (see GitHub Actions log).')),
 
               heading('Steps to Reproduce'),
-              // Extract Gherkin steps from first failure's stack
-              (failures.length > 0 && failures[0].stack)
-                ? (() => {
-                    const stepLines = failures[0].stack.split('\n').filter(l => /\bat\b.*\.feature:\d+/.test(l) || /^\s*[✽✓✗].+\.feature:\d+/.test(l));
-                    return stepLines.length > 0
-                      ? bullets(stepLines.slice(0, 10).map(s => {
-                          // Extract just the step text: "at ✽.Given I open... (file:...)" → "Given I open..."
-                          const match = s.match(/[✽✓✗]\.(.+?)\s*\(file:/);
-                          return match && match[1] ? match[1].trim() : s.trim();
-                        }))
-                      : bullets([
-                          `1. Clone repository at master branch`,
-                          `2. Run: mvn clean verify -Denv=${env}` + (site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : ''),
-                          `3. Review stack traces in failsafe reports`
-                        ]);
-                  })()
-                : bullets([
-                    `1. Clone repository at master branch`,
-                    `2. Run: mvn clean verify -Denv=${env}` + (site !== 'all' ? ` -Dcucumber.filter.tags=@${site}` : ''),
-                    `3. Review stack traces in failsafe reports`
-                  ]),
+              ...stepsContent,
 
               heading('Failure Details'),
-              failureBlock ? code(failureBlock.slice(0, 4000)) : para('See attached failsafe reports.'),
+              ...failureDetails,
 
               heading('Links'),
               link('GitHub Actions Run', runUrl),
@@ -1164,8 +1312,9 @@ jobs:
                 : 'No screenshots captured for this run.'),
             ];
 
-            // ── Search for existing JIRA ─────────────────────────────────────
-            const jql = `project = "${projectKey}" AND summary ~ "Auto Test Failure - GitHub #${issueNumber}" AND status != Done AND status != Closed`;
+            // ── Search for existing JIRA (dedup by GH issue # label) ─────────
+            const ghLabel = `gh-issue-${issueNumber}`;
+            const jql = `project = "${projectKey}" AND labels = "${ghLabel}" AND status != Done AND status != Closed`;
             const searchResp = await fetch(`${jiraBase}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=1`, {
               headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
             });
@@ -1204,10 +1353,10 @@ jobs:
                 body: JSON.stringify({
                   fields: {
                     project: { key: projectKey },
-                    summary: `Auto Test Failure - GitHub #${issueNumber} [${site}/${env}] - Retries Exhausted`,
+                    summary: bugSummary,
                     description: { type: "doc", version: 1, content: adfContent },
                     issuetype: { name: issueTypeName },
-                    labels: ["auto-test-failure", "self-healing-framework", "retries-exhausted"],
+                    labels: ["auto-test-failure", "self-healing-framework", "retries-exhausted", ghLabel],
                     priority: { name: "Highest" }
                   }
                 })
