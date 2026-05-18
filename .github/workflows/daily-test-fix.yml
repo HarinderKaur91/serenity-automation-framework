@@ -418,11 +418,46 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Download Initial Run Artifact (for post-merge comparison)
-        if: always() && github.event.inputs.initial_run_id != ''
+      - name: Resolve Initial Run ID (post-merge fallback)
+        if: always() && github.event.inputs.rerun_count == '2' && github.event.inputs.initial_run_id == ''
+        id: resolve_initial
         env:
           GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          INITIAL_RUN_ID: ${{ github.event.inputs.initial_run_id }}
+          ENV_NAME: ${{ github.event.inputs.env || 'qa' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🔍 initial_run_id not supplied for rerun_count=2 — searching linked issue for PASS1_RUN_ID..."
+          BODY=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state all \
+            --limit 20 \
+            --json body \
+            --jq '.[] | select(.body != null) | select((.body | contains("PASS1_RUN_ID")) and (.body | contains("PASS1_CONFIG env='"$ENV_NAME"'"))) | .body' \
+            2>/dev/null | head -1 || true)
+          if [ -z "$BODY" ]; then
+            echo "⚠️ No issue found with PASS1_RUN_ID for env=${ENV_NAME}. Comparison will be skipped."
+            echo "resolved_id=" >> $GITHUB_OUTPUT
+          else
+            RUN_ID=$(echo "$BODY" | grep -oP '<!--\s*PASS1_RUN_ID\s+id=\K\d+' || true)
+            if [ -n "$RUN_ID" ]; then
+              echo "✅ Resolved PASS 1 run id from issue: $RUN_ID"
+              echo "resolved_id=$RUN_ID" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ PASS1_RUN_ID marker not found in issue body. Comparison will be skipped."
+              echo "resolved_id=" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Download Initial Run Artifact (for post-merge comparison)
+        if: >-
+          always() && (
+            github.event.inputs.initial_run_id != '' ||
+            steps.resolve_initial.outputs.resolved_id != ''
+          )
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          INITIAL_RUN_ID: ${{ github.event.inputs.initial_run_id || steps.resolve_initial.outputs.resolved_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -496,7 +531,11 @@ jobs:
           echo "Final email attachments: $ATTACHMENTS"
 
       - name: Build Initial-vs-Current Comparison Report
-        if: always() && github.event.inputs.initial_run_id != ''
+        if: >-
+          always() && (
+            github.event.inputs.initial_run_id != '' ||
+            steps.resolve_initial.outputs.resolved_id != ''
+          )
         id: comparison
         shell: bash
         run: |
