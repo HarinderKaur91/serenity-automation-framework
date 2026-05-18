@@ -427,19 +427,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "🔍 initial_run_id not supplied for rerun_count=2 — searching linked issue for PASS1_RUN_ID..."
+          echo "🔍 initial_run_id not supplied for rerun_count=2 — searching linked issues for PASS1_RUN_ID..."
+          # Fetch the full body of the first matching issue (no head -1 truncation)
+          # Use jq --arg to safely inject the env variable
           BODY=$(gh issue list \
             --repo "${{ github.repository }}" \
             --state all \
-            --limit 20 \
+            --limit 30 \
             --json body \
-            --jq '.[] | select(.body != null) | select((.body | contains("PASS1_RUN_ID")) and (.body | contains("PASS1_CONFIG env='"$ENV_NAME"'"))) | .body' \
-            2>/dev/null | head -1 || true)
+            --jq --arg env "$ENV_NAME" \
+            '[.[] | select(.body != null) | select(.body | (contains("PASS1_RUN_ID") and contains("PASS1_CONFIG env=\($env)"))) | .body][0] // ""' \
+            2>/dev/null || true)
           if [ -z "$BODY" ]; then
             echo "⚠️ No issue found with PASS1_RUN_ID for env=${ENV_NAME}. Comparison will be skipped."
             echo "resolved_id=" >> $GITHUB_OUTPUT
           else
-            RUN_ID=$(echo "$BODY" | grep -oP '<!--\s*PASS1_RUN_ID\s+id=\K\d+' || true)
+            RUN_ID=$(printf '%s' "$BODY" | grep -oP '<!--\s*PASS1_RUN_ID\s+id=\K\d+' | head -1 || true)
             if [ -n "$RUN_ID" ]; then
               echo "✅ Resolved PASS 1 run id from issue: $RUN_ID"
               echo "resolved_id=$RUN_ID" >> $GITHUB_OUTPUT
