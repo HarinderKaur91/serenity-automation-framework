@@ -441,21 +441,21 @@ jobs:
             echo "summary_html=" >> $GITHUB_OUTPUT
           fi
 
-          # Also copy Serenity's own index.html out as a flat attachment.
-          # Note: this is the Serenity shell page; charts on it draw from inline
-          # data so the top-level totals render, but clicking through to
-          # feature/scenario detail pages will not work without the rest of the
-          # report folder (provided via the artifact link).
+          # Also build a self-contained copy of Serenity's index.html with
+          # every CSS, JS, font, and image inlined as data URIs. The result
+          # renders the full Serenity dashboard (charts, totals, capabilities
+          # tables) standalone. Drilldown into feature pages still won't work
+          # — that needs the full ZIP artifact.
           if [ -d "pass1-reports/serenity" ] && [ -f "pass1-reports/serenity/index.html" ]; then
-            SERENITY_SRC="pass1-reports/serenity/index.html"
-          elif [ -f "target/site/serenity/index.html" ]; then
-            SERENITY_SRC="target/site/serenity/index.html"
+            SERENITY_DIR="pass1-reports/serenity"
+          elif [ -d "target/site/serenity" ] && [ -f "target/site/serenity/index.html" ]; then
+            SERENITY_DIR="target/site/serenity"
           else
-            SERENITY_SRC=""
+            SERENITY_DIR=""
           fi
-          if [ -n "$SERENITY_SRC" ]; then
+          if [ -n "$SERENITY_DIR" ]; then
             SERENITY_OUT="serenity-index-${{ matrix.env }}.html"
-            cp "$SERENITY_SRC" "$SERENITY_OUT"
+            python3 .github/scripts/inline_serenity_index.py "$SERENITY_DIR" "$SERENITY_OUT"
             echo "serenity_index_html=$SERENITY_OUT" >> $GITHUB_OUTPUT
             ls -lh "$SERENITY_OUT"
             if [ -n "$ATTACHMENTS" ]; then
