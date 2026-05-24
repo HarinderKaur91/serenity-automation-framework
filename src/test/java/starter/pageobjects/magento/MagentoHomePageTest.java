@@ -26,6 +26,17 @@ class MagentoHomePageTest {
     }
 
     @Test
+    void shouldDetectNonSslCloudflareErrors() {
+        String pageSource = """
+                <html>
+                <div id="cf-error-details">Connection timed out Error code 522</div>
+                </html>
+                """;
+
+        assertThat(MagentoHomePage.isCloudflareSslErrorPage("", pageSource)).isTrue();
+    }
+
+    @Test
     void shouldNotTreatNormalSearchResultsAsCloudflareError() {
         String pageSource = """
                 <html>
