@@ -115,9 +115,6 @@ public class MagentoHomePage extends PageObject {
         if (title != null && title.contains("526: Invalid SSL certificate")) {
             return true;
         }
-        return pageSource != null
-                && pageSource.contains("cf-error-details")
-                && (pageSource.contains("Error code 526")
-                || pageSource.contains("Invalid SSL certificate"));
+        return pageSource != null && pageSource.contains("cf-error-details");
     }
 }
