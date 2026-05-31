@@ -19,9 +19,7 @@ public class InventoryPage extends PageObject {
     }
 
     public void addProductToCart(String productName) {
-        // BUG: replaces spaces AFTER lowercasing but also strips apostrophes incorrectly;
-        // double-replace turns single spaces into double dashes for multi-word names
-        String slug = productName.toLowerCase().replace(" ", "--").replace("-", "-");
+        String slug = productName.toLowerCase().replace(" ", "-");
         $(By.id("add-to-cart-" + slug)).waitUntilEnabled().click();
     }
 
