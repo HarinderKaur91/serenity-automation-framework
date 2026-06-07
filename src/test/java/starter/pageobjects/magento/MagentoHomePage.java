@@ -59,6 +59,8 @@ public class MagentoHomePage extends PageObject {
             ensureNotOnCloudflareErrorPage();
             $(PRODUCT_RESULTS).waitUntilVisible();
             findAll(PRODUCT_RESULTS).get(0).click();
+            ensureNotOnCloudflareErrorPage();
+            $(ProductDetailPage.PRODUCT_NAME).waitUntilVisible();
             return null;
         });
     }
