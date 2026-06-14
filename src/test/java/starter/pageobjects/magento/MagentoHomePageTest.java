@@ -15,10 +15,34 @@ class MagentoHomePageTest {
     }
 
     @Test
+    void shouldDetectOtherCloudflareErrorCodesFromTitle() {
+        assertThat(MagentoHomePage.isCloudflareSslErrorPage(
+                "softwaretestingboard.com | 525: SSL Handshake Failed",
+                "")).isTrue();
+        assertThat(MagentoHomePage.isCloudflareSslErrorPage(
+                "softwaretestingboard.com | 522: Connection timed out",
+                "")).isTrue();
+        assertThat(MagentoHomePage.isCloudflareSslErrorPage(
+                "softwaretestingboard.com | 521: Web server is down",
+                "")).isTrue();
+    }
+
+    @Test
     void shouldDetectCloudflareSslErrorFromPageSourceMarkers() {
         String pageSource = """
                 <html>
                 <div id="cf-error-details">Invalid SSL certificate Error code 526</div>
+                </html>
+                """;
+
+        assertThat(MagentoHomePage.isCloudflareSslErrorPage("", pageSource)).isTrue();
+    }
+
+    @Test
+    void shouldDetectOtherCloudflareErrorsFromPageSource() {
+        String pageSource = """
+                <html>
+                <div id="cf-error-details">Error code 522 Connection timed out</div>
                 </html>
                 """;
 
@@ -37,3 +61,4 @@ class MagentoHomePageTest {
         assertThat(MagentoHomePage.isCloudflareSslErrorPage("Search results for: 'jacket'", pageSource)).isFalse();
     }
 }
+
