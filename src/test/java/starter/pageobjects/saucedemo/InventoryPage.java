@@ -24,7 +24,7 @@ public class InventoryPage extends PageObject {
         $(By.id(addToCartButtonIdFor(productName))).waitUntilEnabled().click();
     }
 
-    static String addToCartButtonIdFor(String productName) {
+    public static String addToCartButtonIdFor(String productName) {
         String slug = productName
                 .toLowerCase(Locale.ROOT)
                 .trim()

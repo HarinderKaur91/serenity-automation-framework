@@ -16,6 +16,7 @@ public class MagentoHomePage extends PageObject {
 
     public static final By PRODUCT_RESULTS = By.cssSelector(".product-item-name a");
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
+    private static final Runnable NO_OP_RETRY = () -> {};
     private static final By LOADING_MASK = By.cssSelector(".loading-mask");
     private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
     private static final int MAX_SSL_ERROR_RETRIES = Integer.getInteger("magento.cloudflare.ssl.max.retries", 6);
@@ -29,7 +30,7 @@ public class MagentoHomePage extends PageObject {
             navigateToSearchResults(term);
             ensureNotOnCloudflareErrorPage();
             return null;
-        }, () -> {});
+        }, NO_OP_RETRY);
     }
 
     private void navigateToSearchResults(String term) {
