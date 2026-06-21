@@ -25,6 +25,14 @@ public class MagentoHomePage extends PageObject {
 
     public void searchFor(String term) {
         lastSearchTerm = term;
+        withCloudflareRetry(() -> {
+            navigateToSearchResults(term);
+            ensureNotOnCloudflareErrorPage();
+            return null;
+        }, () -> {});
+    }
+
+    private void navigateToSearchResults(String term) {
         String encodedTerm = URLEncoder.encode(term, StandardCharsets.UTF_8);
         getDriver().navigate().to(SEARCH_RESULTS_URL + encodedTerm);
         waitForLoadingToComplete();
@@ -73,6 +81,10 @@ public class MagentoHomePage extends PageObject {
     }
 
     private <T> T withCloudflareRetry(Supplier<T> action) {
+        return withCloudflareRetry(action, this::retrySearchResultsPage);
+    }
+
+    private <T> T withCloudflareRetry(Supplier<T> action, Runnable beforeRetry) {
         RuntimeException lastException = null;
         for (int attempt = 1; attempt <= MAX_SSL_ERROR_RETRIES; attempt++) {
             try {
@@ -83,10 +95,16 @@ public class MagentoHomePage extends PageObject {
                     throw e;
                 }
                 waitBeforeRetry(attempt);
-                searchFor(lastSearchTerm);
+                beforeRetry.run();
             }
         }
         throw lastException;
+    }
+
+    private void retrySearchResultsPage() {
+        if (lastSearchTerm != null) {
+            navigateToSearchResults(lastSearchTerm);
+        }
     }
 
     private void ensureNotOnCloudflareErrorPage() {

@@ -24,11 +24,10 @@ public class CheckoutPage extends PageObject {
     }
 
     public void fillCustomerInfo(String firstName, String lastName, String postalCode) {
-        // BUG: types all values into FIRST_NAME, leaving last name and postal code empty
-        $(FIRST_NAME).type(firstName);
-        $(FIRST_NAME).type(lastName);
-        $(FIRST_NAME).type(postalCode);
-        $(CONTINUE_BUTTON).click();
+        $(FIRST_NAME).waitUntilEnabled().type(firstName);
+        $(LAST_NAME).waitUntilEnabled().type(lastName);
+        $(POSTAL_CODE).waitUntilEnabled().type(postalCode);
+        $(CONTINUE_BUTTON).waitUntilEnabled().click();
     }
 
     public void finishCheckout() {
