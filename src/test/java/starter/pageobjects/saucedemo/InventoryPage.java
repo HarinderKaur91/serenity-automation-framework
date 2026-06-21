@@ -29,7 +29,7 @@ public class InventoryPage extends PageObject {
                 .toLowerCase(Locale.ROOT)
                 .trim()
                 .replaceAll("[^a-z0-9]+", "-")
-                .replaceAll("(^-|-$)", "");
+                .replaceAll("^-|-$", "");
         return "add-to-cart-" + slug;
     }
 
