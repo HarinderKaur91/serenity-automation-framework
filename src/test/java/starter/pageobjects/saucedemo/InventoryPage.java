@@ -4,6 +4,8 @@ import org.openqa.selenium.By;
 
 import net.serenitybdd.core.pages.PageObject;
 
+import java.util.Locale;
+
 public class InventoryPage extends PageObject {
     public static final By INVENTORY_CONTAINER = By.id("inventory_container");
     public static final By PRODUCT_TITLES = By.cssSelector(".inventory_item_name");
@@ -19,10 +21,14 @@ public class InventoryPage extends PageObject {
     }
 
     public void addProductToCart(String productName) {
-        // BUG: replaces spaces AFTER lowercasing but also strips apostrophes incorrectly;
-        // double-replace turns single spaces into double dashes for multi-word names
-        String slug = productName.toLowerCase().replace(" ", "--").replace("-", "-");
-        $(By.id("add-to-cart-" + slug)).waitUntilEnabled().click();
+        $(By.id(toAddToCartButtonId(productName))).waitUntilEnabled().click();
+    }
+
+    static String toAddToCartButtonId(String productName) {
+        String slug = productName.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+|-+$", "");
+        return "add-to-cart-" + slug;
     }
 
     public String cartBadgeCount() {

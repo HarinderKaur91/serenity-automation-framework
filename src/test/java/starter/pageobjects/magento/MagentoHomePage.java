@@ -18,7 +18,7 @@ public class MagentoHomePage extends PageObject {
     public static final By PAGE_TITLE = By.cssSelector(".page-title");
     private static final By LOADING_MASK = By.cssSelector(".loading-mask");
     private static final String SEARCH_RESULTS_URL = "https://magento.softwaretestingboard.com/catalogsearch/result/?q=";
-    private static final int MAX_SSL_ERROR_RETRIES = Integer.getInteger("magento.cloudflare.ssl.max.retries", 6);
+    private static final int MAX_SSL_ERROR_RETRIES = Integer.getInteger("magento.cloudflare.ssl.max.retries", 8);
     private static final long BASE_CLOUDFLARE_RETRY_DELAY_MILLIS = Long.getLong("magento.cloudflare.ssl.retry.delay.millis", 2000L);
     private static final long MAX_CLOUDFLARE_RETRY_DELAY_MILLIS = Long.getLong("magento.cloudflare.ssl.max.retry.delay.millis", 30000L);
     private String lastSearchTerm;
