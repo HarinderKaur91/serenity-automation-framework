@@ -27,7 +27,7 @@ public class InventoryPage extends PageObject {
     static String toAddToCartButtonId(String productName) {
         String slug = productName.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9]+", "-")
-                .replaceAll("^-|-$", "");
+                .replaceAll("^-+|-+$", "");
         return "add-to-cart-" + slug;
     }
 
